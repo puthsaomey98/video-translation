@@ -1,0 +1,14 @@
+/venv/
+/output/
+/input/
+
+# Temporary audio separation output
+/temp_separated/
+
+# Executables & binaries
+*.exe
+
+# Audio files
+*.mp3
+*.mp4
+*.wav

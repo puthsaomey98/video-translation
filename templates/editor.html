@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Khmer Studio - Multi-Track Timeline Editor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { height: 8px; width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #020617; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #334155; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 h-screen flex flex-col font-sans select-none overflow-hidden">
+
+    <!-- Top Header Bar -->
+    <header class="bg-slate-900 border-b border-slate-800 px-5 py-2.5 flex justify-between items-center shadow-md z-50 shrink-0">
+        <div class="flex items-center space-x-3">
+            <a href="/" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-1.5 rounded-lg transition flex items-center space-x-1 font-medium">
+                <span>←</span><span>Projects</span>
+            </a>
+            <div class="h-4 w-px bg-slate-800"></div>
+            <h1 id="projectTitle" class="text-xs font-semibold text-indigo-400 truncate max-w-xs">Loading Project...</h1>
+        </div>
+
+        <div class="flex items-center space-x-3">
+            <button onclick="autoTrimAllVoices()" class="bg-amber-600 hover:bg-amber-500 text-white text-xs px-3.5 py-1.5 rounded-lg transition shadow flex items-center space-x-1 font-mono">
+                <span>✂️ Auto-Trim Overlaps</span>
+            </button>
+            <button onclick="openOutputFolder()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3.5 py-1.5 rounded-lg transition flex items-center space-x-1.5 font-mono">
+                <span>📂</span><span>Folder</span>
+            </button>
+            <button id="renderBtn" onclick="saveAndRender()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs px-4 py-1.5 rounded-lg shadow-lg shadow-indigo-600/30 transition flex items-center space-x-1.5">
+                <span>⚡ Export Video</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Workspace Split -->
+    <div class="flex-1 flex flex-col overflow-hidden">
+        
+        <!-- TOP SECTION: Preview Player & Inspector Panel -->
+        <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-hidden">
+            
+            <!-- CENTER PREVIEW PANEL (8 Cols) -->
+            <div class="lg:col-span-8 bg-slate-950 p-4 flex flex-col items-center justify-center relative overflow-hidden">
+                <div class="relative w-full max-w-3xl aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-slate-900 flex items-center justify-center">
+                    <video id="videoPreview" controls class="w-full h-full object-contain">
+                        Your browser does not support the video tag.
+                    </video>
+                    <!-- Background Audio Node for Preview Sync -->
+                    <audio id="bgAudioNode" preload="auto"></audio>
+                </div>
+                
+                <!-- Quick Playback Controller Bar -->
+                <div class="mt-3 flex items-center space-x-3">
+                    <button onclick="togglePlayPause()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg transition shadow flex items-center space-x-1">
+                        <span>▶ Play / Pause</span>
+                    </button>
+                    <span id="currentTimeDisplay" class="text-xs text-slate-400 font-mono">00:00.00 / 00:00.00</span>
+                </div>
+            </div>
+
+            <!-- RIGHT INSPECTOR & SCRIPTS PANEL (4 Cols) -->
+            <div class="lg:col-span-4 bg-slate-900 border-l border-slate-800 flex flex-col h-full overflow-hidden">
+                <div class="p-3.5 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+                    <div class="flex items-center space-x-2">
+                        <span class="text-xs font-bold text-slate-300 uppercase tracking-wider">Khmer Script Inspector</span>
+                    </div>
+                    <span id="segmentCount" class="text-[10px] bg-indigo-950 text-indigo-300 px-2.5 py-0.5 rounded-full border border-indigo-800/50 font-mono">0 Segments</span>
+                </div>
+
+                <!-- Scrollable Script Cards -->
+                <div id="segmentsContainer" class="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
+                    <!-- Injected via JS -->
+                </div>
+            </div>
+
+        </div>
+
+        <!-- BOTTOM MULTITRACK TIMELINE SECTION -->
+        <div class="h-64 bg-slate-900 border-t border-slate-800 flex flex-col shrink-0">
+            
+            <!-- Timeline Toolbar / Real-time Volume Sliders -->
+            <div class="px-4 py-2 border-b border-slate-800 flex justify-between items-center bg-slate-900/90 text-xs">
+                <div class="flex items-center space-x-4">
+                    <span class="font-bold text-slate-300 uppercase tracking-wider text-[11px]">⏱️ Multi-Track Timeline</span>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-slate-400">Background Vol:</span>
+                        <input type="range" id="bgVolume" min="0" max="1" step="0.05" value="0.7" class="w-20 accent-indigo-500" oninput="updateBackgroundVolumeRealtime(this.value)">
+                        <span id="bgVolVal" class="text-indigo-400 font-mono text-[10px]">0.7</span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-slate-400">Voice Vol:</span>
+                        <input type="range" id="voiceVolume" min="0.5" max="3.0" step="0.1" value="1.5" class="w-20 accent-indigo-500" oninput="document.getElementById('voiceVolVal').innerText=this.value">
+                        <span id="voiceVolVal" class="text-indigo-400 font-mono text-[10px]">1.5</span>
+                    </div>
+                </div>
+
+                <!-- Zoom Controls -->
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400 font-mono" id="zoomLabel">Zoom: 1.0x</span>
+                    <button onclick="setZoom(1.0)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-0.5 rounded font-mono text-[10px]">1x</button>
+                    <button onclick="setZoom(10.0)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-0.5 rounded font-mono text-[10px]">10x</button>
+                    <button onclick="setZoom(20.0)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-0.5 rounded font-mono text-[10px]">20x</button>
+                    <button onclick="setZoom(40.0)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-0.5 rounded font-mono text-[10px]">40x</button>
+                </div>
+            </div>
+
+            <!-- Scrollable Timeline Tracks Canvas -->
+            <div id="timelineContainer" class="flex-1 overflow-x-auto overflow-y-hidden relative custom-scrollbar bg-slate-950 p-2 cursor-pointer">
+                <div id="timelineAxis" class="relative h-36 bg-slate-900/60 rounded-xl border border-slate-800/80" style="width: 100%; min-width: 1400px;">
+                    <!-- Moving Playhead Line Indicator -->
+                    <div id="playhead" class="absolute top-0 bottom-0 w-0.5 bg-red-500 z-30 pointer-events-none" style="left: 0%;">
+                        <div class="w-3 h-3 bg-red-500 rounded-full -ml-[5px] -mt-1 shadow-md"></div>
+                    </div>
+                    <!-- Track Lanes injected via JS -->
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- Export Status Overlay Card -->
+    <div id="statusCard" class="fixed bottom-6 right-6 bg-slate-900 border border-slate-700 p-4 rounded-xl shadow-2xl z-50 hidden w-80 space-y-2">
+        <h3 class="text-xs font-bold text-slate-300 uppercase tracking-wider">Export Progress</h3>
+        <p id="renderStatusText" class="text-indigo-300 text-xs">Processing...</p>
+        <div id="downloadContainer" class="hidden pt-1">
+            <a id="downloadLink" href="#" target="_blank" class="block w-full text-center bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2 rounded-lg transition shadow">
+                📥 Download Final Video
+            </a>
+        </div>
+    </div>
+
+    <script>
+        const taskId = window.location.pathname.split('/').pop();
+        let currentData = null;
+        let currentZoom = 1.0;
+        let activeTestAudio = null;
+        let lastActiveIndex = -1;
+
+        function getTimelineDuration() {
+            const videoEl = document.getElementById('videoPreview');
+            if (videoEl && !isNaN(videoEl.duration) && videoEl.duration > 0) {
+                return videoEl.duration;
+            }
+            return 10;
+        }
+
+        async function loadEditorData() {
+            try {
+                const res = await fetch(`/api/editor-data/${taskId}`);
+                const data = await res.json();
+                if (data.error) { alert(data.error); return; }
+                currentData = data;
+                
+                document.getElementById('projectTitle').innerText = data.filename || "Project Workspace";
+                
+                const videoEl = document.getElementById('videoPreview');
+                const bgAudioEl = document.getElementById('bgAudioNode');
+                
+                videoEl.pause();
+                // Encode URL to safely handle Chinese characters, emojis, spaces, and brackets
+                const safeVideoUrl = encodeURI(data.output_video) + `?t=${Date.now()}`;
+                videoEl.src = safeVideoUrl;
+                videoEl.load();
+
+                videoEl.onerror = () => {
+                    const errCode = videoEl.error ? videoEl.error.code : 'unknown';
+                    console.error("❌ HTML5 Video Error Code:", errCode);
+                    if (errCode === 4) {
+                        alert("⚠️ Browser Error: The video format is not supported or the render is incomplete. Please re-export video.");
+                    }
+                };
+
+                if (data.background_audio) {
+                    bgAudioEl.src = data.background_audio + `?t=${Date.now()}`;
+                }
+
+                videoEl.onloadedmetadata = () => {
+                    renderWorkspace(data.segments);
+                };
+
+                if (videoEl.readyState >= 1 && !isNaN(videoEl.duration) && videoEl.duration > 0) {
+                    renderWorkspace(data.segments);
+                }
+
+                videoEl.onplay = () => { if (bgAudioEl.src) bgAudioEl.play(); };
+                videoEl.onpause = () => { if (bgAudioEl.src) bgAudioEl.pause(); };
+                videoEl.onseeking = () => { if (bgAudioEl.src) bgAudioEl.currentTime = videoEl.currentTime; };
+                
+                videoEl.ontimeupdate = () => {
+                    const curr = videoEl.currentTime;
+                    updateActiveCardOnPlay(curr);
+                    updateTimeDisplay(curr);
+                    updatePlayheadPosition(curr);
+
+                    if (bgAudioEl.src && !bgAudioEl.paused && Math.abs(bgAudioEl.currentTime - curr) > 0.3) {
+                        bgAudioEl.currentTime = curr;
+                    }
+                };
+
+                window.onkeydown = (e) => {
+                    if (e.code === 'Space' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
+                        e.preventDefault();
+                        togglePlayPause();
+                    }
+                };
+
+                document.getElementById('timelineAxis').onclick = (e) => {
+                    const rect = timelineAxis.getBoundingClientRect();
+                    const clickX = e.clientX - rect.left;
+                    const totalDur = getTimelineDuration();
+                    const percent = Math.max(0, Math.min(1, clickX / timelineAxis.offsetWidth));
+                    videoEl.currentTime = percent * totalDur;
+                    if (bgAudioEl.src) bgAudioEl.currentTime = videoEl.currentTime;
+                };
+
+                const initialBgVol = data.bg_volume !== undefined ? data.bg_volume : 0.7;
+                document.getElementById('bgVolume').value = initialBgVol;
+                document.getElementById('bgVolVal').innerText = initialBgVol;
+                if (bgAudioEl.src) bgAudioEl.volume = initialBgVol;
+
+                document.getElementById('voiceVolume').value = data.voice_volume !== undefined ? data.voice_volume : 1.5;
+                document.getElementById('voiceVolVal').innerText = data.voice_volume !== undefined ? data.voice_volume : 1.5;
+
+            } catch (err) {
+                console.error("Failed to load editor data:", err);
+            }
+        }
+
+        function togglePlayPause() {
+            const videoEl = document.getElementById('videoPreview');
+            const bgAudioEl = document.getElementById('bgAudioNode');
+            if (videoEl.paused) {
+                videoEl.play();
+                if (bgAudioEl.src) bgAudioEl.play();
+            } else {
+                videoEl.pause();
+                if (bgAudioEl.src) bgAudioEl.pause();
+            }
+        }
+
+        function updateBackgroundVolumeRealtime(val) {
+            document.getElementById('bgVolVal').innerText = val;
+            const bgAudioEl = document.getElementById('bgAudioNode');
+            if (bgAudioEl) bgAudioEl.volume = parseFloat(val);
+        }
+
+        function updatePlayheadPosition(currentTime) {
+            const totalDur = getTimelineDuration();
+            if (!totalDur || totalDur <= 0) return;
+            const percent = Math.min(Math.max((currentTime / totalDur) * 100, 0), 100);
+            const playhead = document.getElementById('playhead');
+            if (playhead) playhead.style.left = `${percent}%`;
+
+            const videoEl = document.getElementById('videoPreview');
+            const container = document.getElementById('timelineContainer');
+            const timelineAxis = document.getElementById('timelineAxis');
+            
+            if (container && timelineAxis && videoEl && !videoEl.paused) {
+                const axisWidth = timelineAxis.offsetWidth;
+                const playheadX = (currentTime / totalDur) * axisWidth;
+                const scrollLeft = container.scrollLeft;
+                const clientWidth = container.clientWidth;
+
+                if (playheadX > scrollLeft + clientWidth - 150 || playheadX < scrollLeft) {
+                    container.scrollLeft = Math.max(0, playheadX - clientWidth * 0.3);
+                }
+            }
+        }
+
+        function updateTimeDisplay(current) {
+            const totalDur = getTimelineDuration();
+            const fmt = (sec) => {
+                const m = Math.floor(sec / 60).toString().padStart(2, '0');
+                const s = Math.floor(sec % 60).toString().padStart(2, '0');
+                const ms = Math.floor((sec % 1) * 100).toString().padStart(2, '0');
+                return `${m}:${s}.${ms}`;
+            };
+            document.getElementById('currentTimeDisplay').innerText = `${fmt(current)} / ${fmt(totalDur)}`;
+        }
+
+        function updateActiveCardOnPlay(currentTime) {
+            if (!currentData || !currentData.segments) return;
+            let activeIndex = -1;
+            currentData.segments.forEach((seg, idx) => {
+                if (currentTime >= seg.start && currentTime <= seg.end) {
+                    activeIndex = idx;
+                }
+            });
+
+            if (activeIndex !== -1 && activeIndex !== lastActiveIndex) {
+                lastActiveIndex = activeIndex;
+                highlightCard(activeIndex);
+            } else if (activeIndex === -1) {
+                lastActiveIndex = -1;
+            }
+        }
+
+        async function openOutputFolder() {
+            try {
+                let filepath = null;
+                if (currentData && currentData.output_video) {
+                    filepath = currentData.output_video.startsWith('/') ? currentData.output_video.slice(1) : currentData.output_video;
+                }
+                await fetch('/api/open-folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filepath: filepath })
+                });
+            } catch (err) { console.error(err); }
+        }
+        
+        function setZoom(level) {
+            currentZoom = Math.max(1.0, Math.min(50.0, level));
+            document.getElementById('zoomLabel').innerText = `Zoom: ${currentZoom.toFixed(1)}x`;
+            if (currentData) {
+                syncInputsToData();
+                renderWorkspace(currentData.segments);
+            }
+        }
+
+        function jumpToSegment(startTime) {
+            const videoEl = document.getElementById('videoPreview');
+            const bgAudioEl = document.getElementById('bgAudioNode');
+            videoEl.muted = false;
+            videoEl.currentTime = Math.max(0, startTime);
+            videoEl.play();
+            if (bgAudioEl.src) {
+                bgAudioEl.currentTime = videoEl.currentTime;
+                bgAudioEl.play();
+            }
+        }
+
+        async function translateSourceText(index) {
+            syncInputsToData();
+            const seg = currentData.segments[index];
+            if (!seg || !seg.source_text.trim()) return;
+
+            const btn = event.currentTarget;
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = "⏳ Translating...";
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/translate-segment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: seg.source_text, source_lang: "auto" })
+                });
+                const data = await res.json();
+                if (data.success && data.translated_text) {
+                    seg.translated_text = data.translated_text;
+                    const transEl = document.getElementById(`text_${index}`);
+                    if (transEl) transEl.value = data.translated_text;
+                    renderWorkspace(currentData.segments);
+                }
+            } catch (err) {
+                console.error(err);
+            } finally {
+                btn.innerHTML = originalHTML;
+                btn.disabled = false;
+            }
+        }
+
+        async function testInstantSegment(index) {
+            syncInputsToData();
+            const seg = currentData.segments[index];
+            if (!seg) return;
+
+            const testBtn = event.currentTarget;
+            const originalText = testBtn.innerHTML;
+            testBtn.innerHTML = "⏳";
+            testBtn.disabled = true;
+
+            try {
+                const res = await fetch(`/api/test-segment/${taskId}/${index}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        start: seg.start, 
+                        end: seg.end, 
+                        source_text: seg.source_text || "", 
+                        translated_text: seg.translated_text,
+                        gender: seg.gender || "female"
+                    })
+                });
+                const data = await res.json();
+                if (data.success && data.audio_url) {
+                    if (activeTestAudio) activeTestAudio.pause();
+                    const videoEl = document.getElementById('videoPreview');
+                    videoEl.muted = true;
+                    videoEl.currentTime = Math.max(0, seg.start);
+                    videoEl.play();
+
+                    activeTestAudio = new Audio(data.audio_url);
+                    activeTestAudio.play();
+                    activeTestAudio.onended = () => { videoEl.muted = false; };
+                }
+            } catch (err) {
+                console.error(err);
+            } finally {
+                testBtn.innerHTML = originalText;
+                testBtn.disabled = false;
+            }
+        }
+
+        function autoTrimAllVoices() {
+            if (!currentData || !currentData.segments) return;
+            syncInputsToData();
+            
+            currentData.segments.sort((a, b) => a.start - b.start);
+
+            for (let i = 0; i < currentData.segments.length - 1; i++) {
+                let curr = currentData.segments[i];
+                let next = currentData.segments[i + 1];
+
+                if (curr.end > next.start) {
+                    curr.end = Math.max(curr.start + 0.1, next.start - 0.05);
+                }
+            }
+
+            renderWorkspace(currentData.segments);
+            alert("✨ All voice segments have been auto-trimmed to eliminate overlaps!");
+        }
+
+        function syncInputsToData() {
+            if (!currentData) return;
+            currentData.segments.forEach((seg, index) => {
+                const startEl = document.getElementById(`start_${index}`);
+                const endEl = document.getElementById(`end_${index}`);
+                const sourceEl = document.getElementById(`source_input_${index}`);
+                const textEl = document.getElementById(`text_${index}`);
+                const genderEl = document.getElementById(`gender_${index}`);
+
+                if (startEl && endEl && sourceEl && textEl) {
+                    seg.start = parseFloat(startEl.value) || seg.start;
+                    seg.end = parseFloat(endEl.value) || seg.end;
+                    seg.source_text = sourceEl.value;
+                    seg.translated_text = textEl.value;
+                    if (genderEl) seg.gender = genderEl.value;
+                }
+            });
+        }
+
+        function renderWorkspace(segments) {
+            const container = document.getElementById('segmentsContainer');
+            const timelineAxis = document.getElementById('timelineAxis');
+            document.getElementById('segmentCount').innerText = `${segments.length} Segments`;
+            
+            container.innerHTML = '';
+            
+            const totalDur = getTimelineDuration();
+            
+            const playheadHTML = `<div id="playhead" class="absolute top-0 bottom-0 w-0.5 bg-red-500 z-30 pointer-events-none" style="left: 0%;"><div class="w-3 h-3 bg-red-500 rounded-full -ml-[5px] -mt-1 shadow-md"></div></div>`;
+            
+            const bgTrackHTML = `<div class="absolute top-2 left-2 right-2 h-11 bg-emerald-950/40 border border-emerald-800/60 rounded-lg px-3 flex items-center justify-between text-[11px] text-emerald-300 font-mono select-none pointer-events-none z-10">
+                <div class="flex items-center space-x-2">
+                    <span>🎵 Background Music Track (Preserved Audio)</span>
+                </div>
+                <span>Full Duration (${totalDur.toFixed(1)}s)</span>
+            </div>`;
+
+            timelineAxis.innerHTML = playheadHTML + bgTrackHTML;
+
+            const baseWidthPx = 1600;
+            const totalWidthPx = baseWidthPx * currentZoom;
+            timelineAxis.style.width = `${totalWidthPx}px`;
+
+            segments.forEach((seg, index) => {
+                const leftPercent = Math.min(Math.max((seg.start / totalDur) * 100, 0), 100);
+                const widthPercent = Math.min(Math.max(((seg.end - seg.start) / totalDur) * 100, 1.5), 100 - leftPercent);
+                const genderIcon = seg.gender === 'male' ? '♂️' : '♀️';
+
+                const axisBlock = document.createElement('div');
+                axisBlock.className = `absolute top-16 h-14 ${seg.gender === 'male' ? 'bg-cyan-600/90 hover:bg-cyan-500 border-cyan-400' : 'bg-indigo-600/90 hover:bg-indigo-500 border-indigo-400'} text-white text-[11px] font-mono px-2 py-1 rounded-lg border cursor-pointer transition flex flex-col justify-center shadow select-none z-20`;
+                axisBlock.style.left = `${leftPercent}%`;
+                axisBlock.style.width = `${widthPercent}%`;
+                axisBlock.innerHTML = `
+                    <div class="flex justify-between items-center text-[9px] text-slate-200">
+                        <span>${genderIcon} v${index + 1}</span>
+                        <span>${seg.start.toFixed(1)}s - ${seg.end.toFixed(1)}s</span>
+                    </div>
+                    <span class="truncate font-sans font-medium">${seg.translated_text || ''}</span>
+                `;
+                axisBlock.onclick = (e) => {
+                    e.stopPropagation();
+                    jumpToSegment(seg.start);
+                    highlightCard(index);
+                };
+                timelineAxis.appendChild(axisBlock);
+
+                const card = document.createElement('div');
+                card.id = `card_${index}`;
+                card.className = "bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2 hover:border-indigo-500/50 transition shadow-sm";
+                card.innerHTML = `
+                    <div class="flex justify-between items-center text-xs">
+                        <div class="flex items-center space-x-2">
+                            <span class="bg-indigo-950 text-indigo-300 font-mono px-2 py-0.5 rounded border border-indigo-800/50 text-[11px] font-bold">Voice #${index + 1}</span>
+                            <select id="gender_${index}" onchange="syncInputsToData(); renderWorkspace(currentData.segments);" 
+                                class="bg-slate-900 border border-slate-700 text-slate-200 rounded px-1.5 py-0.5 text-[10px] font-mono focus:outline-none focus:border-indigo-500">
+                                <option value="female" ${(seg.gender || 'female') === 'female' ? 'selected' : ''}>♀️ Female (Sreymom)</option>
+                                <option value="male" ${seg.gender === 'male' ? 'selected' : ''}>♂️ Male (Piseth)</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center space-x-1">
+                            <button onclick="testInstantSegment(${index}); highlightCard(${index});" class="bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-0.5 rounded font-mono text-[10px] transition">▶ Test</button>
+                            <button onclick="jumpToSegment(${seg.start}); highlightCard(${index});" class="bg-slate-900 hover:bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono text-[10px] transition border border-slate-700">▶ Video</button>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 font-mono text-[11px]">
+                        <div>
+                            <span class="text-slate-500 text-[10px]">Start:</span>
+                            <input type="number" step="0.05" value="${seg.start}" id="start_${index}" oninput="syncInputsToData(); renderWorkspace(currentData.segments);"
+                                class="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-slate-200 text-center text-xs">
+                        </div>
+                        <div>
+                            <span class="text-slate-500 text-[10px]">End:</span>
+                            <input type="number" step="0.05" value="${seg.end}" id="end_${index}" oninput="syncInputsToData(); renderWorkspace(currentData.segments);"
+                                class="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-slate-200 text-center text-xs">
+                        </div>
+                    </div>
+
+                    <div class="space-y-2 pt-1">
+                        <div class="bg-slate-900/80 border border-slate-800 rounded p-2 space-y-1">
+                            <div class="flex justify-between items-center text-[10px]">
+                                <span class="text-slate-400 uppercase font-mono">Source Text</span>
+                                <button onclick="translateSourceText(${index})" class="text-indigo-400 hover:underline">🔄 Translate</button>
+                            </div>
+                            <textarea id="source_input_${index}" rows="2" oninput="syncInputsToData()"
+                                class="w-full bg-slate-950 border border-slate-700 rounded p-1.5 text-slate-300 text-xs focus:outline-none focus:border-indigo-500">${seg.source_text || ''}</textarea>
+                        </div>
+
+                        <div class="space-y-0.5">
+                            <span class="text-[10px] uppercase font-mono text-indigo-400">Target (Khmer)</span>
+                            <textarea id="text_${index}" rows="2" oninput="syncInputsToData()"
+                                class="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-slate-100 text-xs focus:outline-none focus:border-indigo-500">${seg.translated_text || ''}</textarea>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function highlightCard(index) {
+            document.querySelectorAll('[id^="card_"]').forEach(c => c.classList.remove('border-indigo-500', 'ring-2', 'ring-indigo-500/40'));
+            const target = document.getElementById(`card_${index}`);
+            if (target) {
+                target.classList.add('border-indigo-500', 'ring-2', 'ring-indigo-500/40');
+                target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }
+
+        async function saveAndRender() {
+            if (!currentData) return;
+            syncInputsToData();
+
+            const payload = {
+                segments: currentData.segments,
+                bg_volume: parseFloat(document.getElementById('bgVolume').value),
+                voice_volume: parseFloat(document.getElementById('voiceVolume').value)
+            };
+
+            const statusCard = document.getElementById('statusCard');
+            const statusText = document.getElementById('renderStatusText');
+            const downloadContainer = document.getElementById('downloadContainer');
+            const renderBtn = document.getElementById('renderBtn');
+
+            statusCard.classList.remove('hidden');
+            downloadContainer.classList.add('hidden');
+            renderBtn.disabled = true;
+            statusText.innerText = "⏳ Compiling final Khmer dubbing export... Please wait.";
+
+            try {
+                const res = await fetch(`/api/re-render/${taskId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await res.json();
+
+                if (result.success) {
+                    statusText.innerText = "✅ Export completed successfully!";
+                    downloadContainer.classList.remove('hidden');
+                    
+                    const cacheBustUrl = result.output_video + "?t=" + new Date().getTime();
+                    document.getElementById('downloadLink').href = cacheBustUrl;
+                    
+                    const videoPreview = document.getElementById('videoPreview');
+                    videoPreview.src = cacheBustUrl;
+                    videoPreview.load();
+                } else {
+                    statusText.innerText = "❌ Error: " + result.error;
+                }
+            } catch (err) {
+                statusText.innerText = "❌ Network error during export.";
+                console.error(err);
+            } finally {
+                renderBtn.disabled = false;
+            }
+        }
+
+        window.onload = loadEditorData;
+    </script>
+</body>
+</html>

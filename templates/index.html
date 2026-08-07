@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Khmer Dubbing Studio - Professional Multi-Track Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        slate: { 925: '#0b1329', 950: '#060913' }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+
+    <!-- Top Navigation Bar -->
+    <header class="bg-slate-900/80 backdrop-blur-md border-b border-slate-800/80 px-6 py-3.5 flex justify-between items-center sticky top-0 z-50 shadow-lg">
+        <div class="flex items-center space-x-3">
+            <span class="text-xl p-2 bg-indigo-600/20 border border-indigo-500/30 rounded-xl">🎬</span>
+            <div>
+                <h1 class="text-sm font-bold text-white tracking-wide">Khmer Multi-Track Dubbing Studio</h1>
+                <p class="text-[10px] text-slate-400 font-mono">Multi-Language / Direct Khmer (KH) ➔ Spoken Dubbing Pipeline</p>
+            </div>
+        </div>
+        <div class="flex items-center space-x-2">
+            <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-mono font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <span class="w-1.5 h-1.5 mr-1.5 bg-emerald-400 rounded-full animate-pulse"></span> Engine Ready
+            </span>
+        </div>
+    </header>
+
+    <!-- Main Workspace Layout -->
+    <main class="flex-1 max-w-7xl mx-auto w-full p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 my-2">
+        
+        <!-- LEFT COLUMN (7 Cols): Media Import & Input Files Library -->
+        <div class="lg:col-span-7 space-y-6">
+            
+            <!-- STEP 1: Import Media Card -->
+            <div id="uploadCard" class="bg-slate-900/90 backdrop-blur border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+                <div class="flex justify-between items-center border-b border-slate-800/80 pb-3">
+                    <div>
+                        <h2 class="text-xs font-bold text-white uppercase tracking-wider flex items-center space-x-1.5 font-mono">
+                            <span>📥</span><span>Step 1: Import Media & Subtitles</span>
+                        </h2>
+                    </div>
+                    <!-- Tabs Selector -->
+                    <div class="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+                        <button onclick="switchTab('file')" id="btnTabFile" class="bg-indigo-600 text-white font-semibold px-3 py-1.5 rounded-lg transition shadow-sm">📁 Local Files</button>
+                        <button onclick="switchTab('url')" id="btnTabUrl" class="text-slate-400 hover:text-white font-semibold px-3 py-1.5 rounded-lg transition">🔗 URL Link</button>
+                    </div>
+                </div>
+
+                <!-- Local File Upload Form -->
+                <div id="tabFileContent" class="space-y-3">
+                    <div class="border-2 border-dashed border-slate-700/60 hover:border-indigo-500/80 rounded-xl p-5 text-center transition bg-slate-950/50 group cursor-pointer">
+                        <input type="file" id="videoFile" accept="video/*,.srt,.vtt" class="hidden" onchange="handleFileSelected(event)">
+                        <label for="videoFile" class="cursor-pointer space-y-1.5 block">
+                            <span class="text-2xl block group-hover:scale-110 transition-transform">📤</span>
+                            <p class="text-xs font-semibold text-slate-200" id="fileLabel">Click to browse or drag & drop video/subtitle files</p>
+                            <p class="text-[10px] text-slate-500 font-mono">Supports MP4, MOV, MKV, AVI & SRT/VTT (Khmer/English/Chinese)</p>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- URL Download Form -->
+                <div id="tabUrlContent" class="space-y-3 hidden">
+                    <div class="space-y-2">
+                        <label class="block text-[10px] font-semibold text-slate-400 uppercase font-mono tracking-wider">Video Source Link</label>
+                        <div class="flex space-x-2">
+                            <input type="url" id="videoUrlInput" placeholder="https://www.youtube.com/watch?v=..." 
+                                class="flex-1 bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 transition">
+                            <button onclick="fetchUrlSubtitles()" id="fetchUrlBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs px-4 py-2 rounded-xl transition shadow flex items-center space-x-1 shrink-0">
+                                <span>🔍 Check Subs</span>
+                            </button>
+                        </div>
+
+                        <!-- Subtitle Language Selector Box -->
+                        <div id="subLangContainer" class="space-y-2.5 hidden bg-slate-950 p-3.5 rounded-xl border border-slate-800 animate-fadeIn">
+                            <p id="fetchedVideoTitle" class="text-xs font-bold text-indigo-300 truncate"></p>
+                            <div class="space-y-1">
+                                <label class="block text-[10px] text-slate-400 font-mono uppercase">Select Subtitle Track</label>
+                                <div class="flex space-x-2">
+                                    <select id="urlSubLangSelect" class="flex-1 bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-white focus:outline-none focus:border-indigo-500">
+                                        <option value="">-- No Subtitles (Video Only) --</option>
+                                    </select>
+                                    <button onclick="downloadFromUrl()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2 rounded-xl transition shadow shrink-0">
+                                        ⬇️ Download
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- DOWNLOAD PROGRESS CARD -->
+            <div id="downloadProgressCard" class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-2 hidden text-center animate-fadeIn">
+                <h2 class="text-xs font-bold text-white uppercase font-mono">Downloading Content from URL</h2>
+                <p id="downloadStepText" class="text-xs text-indigo-300 font-mono">Initializing download stream...</p>
+                <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800 relative">
+                    <div id="downloadProgressBar" class="bg-indigo-600 h-full w-0 transition-all duration-300"></div>
+                </div>
+                <span id="downloadPercentageText" class="text-[11px] text-slate-400 font-mono font-bold">0%</span>
+            </div>
+
+            <!-- STEP 2: PARENT & CHILD LIBRARY SECTION -->
+            <div class="bg-slate-900/90 backdrop-blur border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+                <div class="flex justify-between items-center border-b border-slate-800/80 pb-3">
+                    <div class="flex items-center space-x-2">
+                        <span class="text-sm">📂</span>
+                        <div>
+                            <h2 class="text-xs font-bold text-slate-200 uppercase font-mono tracking-wider">Step 2: Media & Clip Library</h2>
+                            <p class="text-[10px] text-slate-400">Manage source videos, split child parts, and paired subtitles.</p>
+                        </div>
+                    </div>
+                    <button onclick="loadInputFiles()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl transition flex items-center space-x-1 shadow-sm font-mono">
+                        <span>🔄</span><span>Refresh</span>
+                    </button>
+                </div>
+                <div id="inputFilesContainer" class="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+                    <div class="flex items-center justify-center p-6 text-slate-500 text-xs space-x-2">
+                        <div class="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                        <span>Scanning input folder...</span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- RIGHT COLUMN (5 Cols): Modals/Configurators & Project History -->
+        <div class="lg:col-span-5 space-y-6">
+            
+            <!-- STEP 3: ADVANCED SPLITTER & TIMELINE SELECTOR MODAL -->
+            <div id="trimmerCard" class="bg-slate-900 border border-indigo-500/30 rounded-2xl p-5 shadow-2xl space-y-4 hidden animate-fadeIn">
+                <div class="flex justify-between items-center border-b border-slate-800 pb-2.5">
+                    <div>
+                        <h2 class="text-xs font-bold text-white uppercase font-mono tracking-wider flex items-center space-x-1.5">
+                            <span>✂️</span><span>Advanced Video Splitter</span>
+                        </h2>
+                        <p id="trimmerSubTitle" class="text-[10px] text-slate-400 mt-0.5 truncate max-w-[260px]">Slice manually or auto-split into balanced chunks.</p>
+                    </div>
+                    <span id="videoDurationLabel" class="text-[10px] bg-indigo-950/80 text-indigo-300 px-2.5 py-0.5 rounded-full border border-indigo-800/50 font-mono font-medium">0s</span>
+                </div>
+
+                <!-- Split Mode Toggle Tabs -->
+                <div class="flex space-x-1.5 border-b border-slate-800 pb-2.5">
+                    <button onclick="switchSplitMode('manual')" id="btnManualMode" class="flex-1 bg-indigo-600 text-white text-xs font-semibold py-1.5 rounded-xl transition shadow">✂️ Manual Slice</button>
+                    <button onclick="switchSplitMode('auto')" id="btnAutoMode" class="flex-1 bg-slate-800 text-slate-300 text-xs font-semibold py-1.5 rounded-xl transition hover:bg-slate-700">⚡ Auto Equal Chunks</button>
+                </div>
+
+                <!-- Video Preview Player -->
+                <div class="w-full bg-black rounded-xl overflow-hidden flex items-center justify-center border border-slate-800 max-h-[180px]">
+                    <video id="previewPlayer" controls class="w-full h-full object-contain max-h-[160px]">
+                        Your browser does not support video preview.
+                    </video>
+                </div>
+
+                <!-- Manual Slice Panel -->
+                <div id="manualSplitPanel" class="grid grid-cols-2 gap-3 bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs">
+                    <div>
+                        <label class="block text-[10px] text-slate-400 font-mono uppercase mb-1">Start (sec)</label>
+                        <input type="number" step="0.1" id="trimStart" value="0" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-mono text-center focus:outline-none focus:border-indigo-500">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-slate-400 font-mono uppercase mb-1">End (sec)</label>
+                        <input type="number" step="0.1" id="trimEnd" value="10" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-mono text-center focus:outline-none focus:border-indigo-500">
+                    </div>
+                </div>
+
+                <!-- Auto-Split Panel -->
+                <div id="autoSplitPanel" class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2 hidden text-xs">
+                    <label class="block text-[10px] text-slate-400 font-mono uppercase">Chunk Duration (Minutes)</label>
+                    <div class="flex items-center space-x-2">
+                        <input type="number" step="0.5" id="chunkMinutesInput" value="5.0" class="w-24 bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-mono text-center focus:outline-none focus:border-indigo-500">
+                        <span class="text-[10px] text-slate-400 leading-tight">Splits with 3s overlap buffer for context.</span>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="flex justify-end space-x-2 pt-1">
+                    <button onclick="closeTrimmer()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold px-3.5 py-2 rounded-xl transition">Cancel</button>
+                    <button id="executeSplitBtn" onclick="executeSplitAction()" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-lg transition">
+                        ✂️ Save Child Clip
+                    </button>
+                </div>
+            </div>
+
+            <!-- TRANSLATION LANGUAGE MODAL CARD -->
+            <div id="translateModalCard" class="bg-slate-900 border border-emerald-500/30 rounded-2xl p-5 shadow-2xl space-y-4 hidden animate-fadeIn">
+                <div class="border-b border-slate-800 pb-2.5">
+                    <h2 class="text-xs font-bold text-white uppercase font-mono tracking-wider flex items-center space-x-1.5">
+                        <span>🌐</span><span>Step 3: Khmer AI Dubbing Configuration</span>
+                    </h2>
+                    <p id="translateModalFilename" class="text-xs text-indigo-300 font-mono mt-1 truncate"></p>
+                </div>
+
+                <!-- Auto Voice & Naturalization Info Box -->
+                <div class="bg-emerald-950/40 border border-emerald-800/60 rounded-xl p-3 text-[11px] text-emerald-300 flex items-start space-x-2">
+                    <span class="text-sm shrink-0">✨</span>
+                    <div>
+                        <p class="font-bold">Preserve Background Music Active</p>
+                        <p class="text-[10px] text-emerald-400/80">Separates original audio, preserves background music, and overlays Khmer TTS speaking voice accurately.</p>
+                    </div>
+                </div>
+
+                <div class="space-y-3 text-xs">
+                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
+                        <label class="block text-[10px] text-slate-400 font-mono uppercase">Source Language</label>
+                        <select id="sourceLangSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:border-indigo-500">
+                            <option value="km" selected>🇰🇭 Khmer (Direct TTS / Pre-translated File)</option>
+                            <option value="zh">🇨🇳 Chinese (Mandarin)</option>
+                            <option value="en">🇬🇧 English</option>
+                            <option value="ja">🇯🇵 Japanese</option>
+                            <option value="ko">🇰🇷 Korean</option>
+                            <option value="th">🇹🇭 Thai</option>
+                            <option value="fr">🇫🇷 French</option>
+                        </select>
+                    </div>
+
+                    <!-- Speaker Voice Mode Selection -->
+                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
+                        <label class="block text-[10px] text-slate-400 font-mono uppercase">Speaker Voice Mode</label>
+                        <select id="voiceModeSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:border-indigo-500">
+                            <option value="auto" selected>🎙️ Auto-Detect Pitch (Male/Female)</option>
+                            <option value="force_female">♀️ Female Voice (Sreymom)</option>
+                            <option value="force_male">♂️ Male Voice (Piseth)</option>
+                        </select>
+                    </div>
+
+                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
+                        <label class="block text-[10px] text-slate-400 font-mono uppercase">Select Khmer Subtitle File (.srt)</label>
+                        <select id="subtitleSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:border-indigo-500">
+                            <option value="">-- Use Speech Recognition (Whisper STT) --</option>
+                        </select>
+                    </div>
+
+                    <!-- Direct Script / Subtitle Paste Box -->
+                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
+                        <div class="flex justify-between items-center">
+                            <label class="block text-[10px] text-slate-400 font-mono uppercase">Or Paste Subtitle / Script Text</label>
+                            <span class="text-[10px] text-indigo-400 font-mono">SRT Format or Plain Lines</span>
+                        </div>
+                        <textarea id="pastedScriptInput" rows="4" 
+                            placeholder="Option A: Paste SRT format&#10;1&#10;00:00:00,000 --> 00:00:02,500&#10;សួស្ដីអ្នកទាំងអស់គ្នា!&#10;&#10;Option B: Or paste plain Khmer text line-by-line..." 
+                            class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono custom-scrollbar"></textarea>
+                    </div>
+
+                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
+                        <label class="block text-[10px] text-slate-400 font-mono uppercase">Output Generation Mode</label>
+                        <select id="outputModeSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:border-indigo-500">
+                            <option value="both" selected>🎬 Both (Khmer Voice + Subtitles - Synced)</option>
+                            <option value="voice">🎙️ Voice Only (Dubbed Khmer Audio + BGM)</option>
+                            <option value="subtitle">📄 Subtitle Only (Khmer .srt Only)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="flex justify-end space-x-2 pt-1">
+                    <button onclick="closeTranslateModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold px-3.5 py-2 rounded-xl transition">Cancel</button>
+                    <button onclick="confirmAndStartTranslation()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-lg transition flex items-center space-x-1">
+                        <span>🚀 Start Khmer Dubbing</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- PROGRESS STATUS CARD -->
+            <div id="progressCard" class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-2.5 hidden text-center animate-fadeIn">
+                <h2 class="text-xs font-bold text-white uppercase font-mono">Khmer AI Dubbing Pipeline in Progress</h2>
+                <p id="progressStepText" class="text-xs text-indigo-300 font-mono">Initializing background separation & audio generation...</p>
+                <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800 relative">
+                    <div id="progressBar" class="bg-indigo-600 h-full w-0 transition-all duration-300"></div>
+                </div>
+                <span id="progressPercentageText" class="text-[11px] text-slate-400 font-mono font-bold">0%</span>
+            </div>
+
+            <!-- RECENT PROJECTS HISTORY SECTION -->
+            <div class="bg-slate-900/90 backdrop-blur border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+                <div class="flex items-center space-x-2 border-b border-slate-800/80 pb-2.5">
+                    <span class="text-sm">📁</span>
+                    <h2 class="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono">Recent Dubbed Projects History</h2>
+                </div>
+                <div id="historyContainer" class="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                    <p class="text-xs text-slate-500 text-center py-4">Loading project history...</p>
+                </div>
+            </div>
+
+        </div>
+
+    </main>
+
+    <script>
+        let globalInputFiles = [];
+        let activeTrimFilename = null;
+        let activeTrimDuration = 0;
+        let activeTranslateFilename = null;
+        let currentSplitMode = 'manual';
+
+        function switchTab(tab) {
+            const fileContent = document.getElementById('tabFileContent');
+            const urlContent = document.getElementById('tabUrlContent');
+            const btnFile = document.getElementById('btnTabFile');
+            const btnUrl = document.getElementById('btnTabUrl');
+
+            if (tab === 'file') {
+                fileContent.classList.remove('hidden');
+                urlContent.classList.add('hidden');
+                btnFile.className = "bg-indigo-600 text-white font-semibold px-3 py-1.5 rounded-lg transition shadow-sm";
+                btnUrl.className = "text-slate-400 hover:text-white font-semibold px-3 py-1.5 rounded-lg transition";
+            } else {
+                fileContent.classList.add('hidden');
+                urlContent.classList.remove('hidden');
+                btnUrl.className = "bg-indigo-600 text-white font-semibold px-3 py-1.5 rounded-lg transition shadow-sm";
+                btnFile.className = "text-slate-400 hover:text-white font-semibold px-3 py-1.5 rounded-lg transition";
+            }
+        }
+
+        function switchSplitMode(mode) {
+            currentSplitMode = mode;
+            const manualPanel = document.getElementById('manualSplitPanel');
+            const autoPanel = document.getElementById('autoSplitPanel');
+            const btnManual = document.getElementById('btnManualMode');
+            const btnAuto = document.getElementById('btnAutoMode');
+            const executeBtn = document.getElementById('executeSplitBtn');
+
+            if (mode === 'manual') {
+                manualPanel.classList.remove('hidden');
+                autoPanel.classList.add('hidden');
+                btnManual.className = "flex-1 bg-indigo-600 text-white text-xs font-semibold py-1.5 rounded-xl transition shadow";
+                btnAuto.className = "flex-1 bg-slate-800 text-slate-300 text-xs font-semibold py-1.5 rounded-xl transition hover:bg-slate-700";
+                executeBtn.innerText = "✂️ Save Child Clip";
+            } else {
+                manualPanel.classList.add('hidden');
+                autoPanel.classList.remove('hidden');
+                btnAuto.className = "flex-1 bg-indigo-600 text-white text-xs font-semibold py-1.5 rounded-xl transition shadow";
+                btnManual.className = "flex-1 bg-slate-800 text-slate-300 text-xs font-semibold py-1.5 rounded-xl transition hover:bg-slate-700";
+                executeBtn.innerText = "⚡ Auto-Split Chunks";
+            }
+        }
+
+        async function handleFileSelected(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            document.getElementById('fileLabel').innerText = `Uploading ${file.name}...`;
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const res = await fetch('/api/upload-preview', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('fileLabel').innerText = "Click to browse or drag & drop video/subtitle files";
+                    loadInputFiles();
+                } else {
+                    alert("Upload failed.");
+                }
+            } catch (err) {
+                console.error(err);
+                alert("Network error during upload.");
+            }
+        }
+
+        async function fetchUrlSubtitles() {
+            const url = document.getElementById('videoUrlInput').value.trim();
+            if (!url) {
+                alert("Please enter a valid URL.");
+                return;
+            }
+
+            const btn = document.getElementById('fetchUrlBtn');
+            btn.innerText = "Checking...";
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/fetch-url-info', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('fetchedVideoTitle').innerText = `📹 ${data.title}`;
+                    const selectEl = document.getElementById('urlSubLangSelect');
+                    
+                    let html = `<option value="">-- No Subtitles (Video Only) --</option>`;
+                    data.languages.forEach(lang => {
+                        const selected = (lang === 'en' || lang === 'en-US' || lang === 'km') ? 'selected' : '';
+                        html += `<option value="${lang}" ${selected}>🌐 Language Code: ${lang}</option>`;
+                    });
+                    selectEl.innerHTML = html;
+                    document.getElementById('subLangContainer').classList.remove('hidden');
+                } else {
+                    alert("Could not fetch video info.");
+                }
+            } catch (err) {
+                console.error(err);
+                alert("Network error checking URL.");
+            } finally {
+                btn.innerText = "Check Subs";
+                btn.disabled = false;
+            }
+        }
+
+        async function downloadFromUrl() {
+            const url = document.getElementById('videoUrlInput').value.trim();
+            const sublangSelect = document.getElementById('urlSubLangSelect');
+            const sublang = sublangSelect ? sublangSelect.value : null;
+            
+            if (!url) {
+                alert("Please enter a valid URL.");
+                return;
+            }
+
+            document.getElementById('uploadCard').classList.add('hidden');
+            document.getElementById('subLangContainer').classList.add('hidden');
+            document.getElementById('downloadProgressCard').classList.remove('hidden');
+
+            try {
+                const res = await fetch('/api/download-url-preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        url: url, 
+                        sublang: sublang ? sublang : null 
+                    })
+                });
+                const data = await res.json();
+                if (data.download_id) {
+                    pollDownloadStatus(data.download_id);
+                } else {
+                    alert("Failed to initiate download.");
+                    document.getElementById('downloadProgressCard').classList.add('hidden');
+                    document.getElementById('uploadCard').classList.remove('hidden');
+                }
+            } catch (err) {
+                console.error(err);
+                alert("Network error initiating download.");
+                document.getElementById('downloadProgressCard').classList.add('hidden');
+                document.getElementById('uploadCard').classList.remove('hidden');
+            }
+        }
+        
+        async function pollDownloadStatus(downloadId) {
+            const interval = setInterval(async () => {
+                try {
+                    const res = await fetch(`/api/download-status/${downloadId}`);
+                    const status = await res.json();
+
+                    document.getElementById('downloadStepText').innerText = status.step || "Downloading...";
+                    const pct = status.progress || 0;
+                    document.getElementById('downloadProgressBar').style.width = `${pct}%`;
+                    document.getElementById('downloadPercentageText').innerText = `${pct}%`;
+
+                    if (status.status === 'completed') {
+                        clearInterval(interval);
+                        document.getElementById('downloadProgressCard').classList.add('hidden');
+                        document.getElementById('uploadCard').classList.remove('hidden');
+                        document.getElementById('videoUrlInput').value = '';
+                        loadInputFiles();
+                    } else if (status.status === 'failed') {
+                        clearInterval(interval);
+                        alert("Download Error: " + status.step);
+                        document.getElementById('downloadProgressCard').classList.add('hidden');
+                        document.getElementById('uploadCard').classList.remove('hidden');
+                    }
+                } catch (err) {
+                    console.error("Polling download status error:", err);
+                }
+            }, 1000);
+        }
+
+        async function loadInputFiles() {
+            const container = document.getElementById('inputFilesContainer');
+            try {
+                const [filesRes, historyRes] = await Promise.all([
+                    fetch('/api/input-files'),
+                    fetch('/api/history')
+                ]);
+                globalInputFiles = await filesRes.json();
+                const historyList = await historyRes.json();
+
+                const historyMap = {};
+                historyList.forEach(item => {
+                    historyMap[item.filename] = item.task_id;
+                });
+                
+                if (globalInputFiles.length === 0) {
+                    container.innerHTML = `<p class="text-xs text-slate-500 text-center py-6">No files found in input folder. Upload or download a video/subtitle above.</p>`;
+                    return;
+                }
+                
+                globalInputFiles.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
+
+                const parents = globalInputFiles.filter(f => !f.filename.startsWith('parent_') && !f.filename.startsWith('clip_') && !f.filename.startsWith('part_') && !f.is_subtitle);
+                const children = globalInputFiles.filter(f => (f.filename.startsWith('parent_') || f.filename.startsWith('clip_') || f.filename.startsWith('part_')) && !f.is_subtitle);
+                const subtitles = globalInputFiles.filter(f => f.is_subtitle);
+
+                const claimedSubtitles = new Set();
+                let html = '';
+
+                parents.forEach((parent, pIndex) => {
+                    const parentGlobalIndex = globalInputFiles.findIndex(f => f.filename === parent.filename);
+                    const parentBase = parent.filename.substring(0, parent.filename.lastIndexOf('.')) || parent.filename;
+
+                    const matchedChildren = children.filter(c => c.filename.includes(parentBase));
+                    matchedChildren.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
+                    
+                    const matchedSubs = subtitles.filter(s => {
+                        const subBase = s.filename.substring(0, s.filename.lastIndexOf('.')) || s.filename;
+                        if (subBase.includes('_part') || s.filename.startsWith('parent_') || s.filename.startsWith('clip_') || s.filename.startsWith('part_')) {
+                            return false;
+                        }
+                        return subBase === parentBase || s.filename.includes(parentBase + '.');
+                    });
+
+                    matchedSubs.forEach(s => claimedSubtitles.add(s.filename));
+
+                    const childContainerId = `child-container-${pIndex}`;
+                    const parentTaskId = historyMap[parent.filename];
+
+                    html += `
+                        <div class="bg-slate-950 border border-slate-800/80 rounded-xl p-3 space-y-2.5 hover:border-slate-700 transition">
+                            <div class="flex justify-between items-center text-xs gap-3">
+                                <div class="truncate max-w-[200px] md:max-w-xs flex items-center space-x-2">
+                                    <span class="text-base shrink-0">🎬</span>
+                                    <span class="font-bold text-white text-xs truncate">${parent.filename}</span>
+                                    <span class="text-indigo-300 font-mono bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800/40 shrink-0 text-[10px]">${parent.duration.toFixed(1)}s</span>
+                                </div>
+                                <div class="flex items-center space-x-1.5 shrink-0">
+                    `;
+
+                    if (matchedChildren.length > 0 || matchedSubs.length > 0) {
+                        html += `
+                            <button id="toggle-btn-${pIndex}" onclick="toggleChildren('${childContainerId}', this)" class="bg-slate-800/80 hover:bg-slate-700 text-indigo-300 px-2.5 py-1 rounded-lg transition font-mono text-[10px] flex items-center space-x-1">
+                                <span>📂 (${matchedChildren.length})</span>
+                                <span>▾</span>
+                            </button>
+                        `;
+                    }
+
+                    html += `
+                        <button data-index="${parentGlobalIndex}" onclick="onTrimBtnClick(this)" class="bg-slate-800/80 hover:bg-slate-700 text-slate-200 px-2.5 py-1 rounded-lg transition font-mono text-[10px]">✂️ Split</button>
+                    `;
+
+                    if (parentTaskId) {
+                        html += `<a href="/editor/${parentTaskId}" class="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded-lg transition font-mono text-[10px] shadow-sm">Edit</a>`;
+                    } else {
+                        html += `<button data-index="${parentGlobalIndex}" onclick="onTranslateBtnClick(this)" class="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 rounded-lg transition font-mono text-[10px] shadow-sm">🚀 Dub Video</button>`;
+                    }
+
+                    html += `
+                        <button onclick="deleteInputFile('${parent.filename}')" class="bg-red-950/60 hover:bg-red-900 text-red-300 p-1 rounded-lg transition text-xs border border-red-900/50" title="Delete File">🗑️</button>
+                                </div>
+                            </div>
+                    `;
+
+                    if (matchedChildren.length > 0 || matchedSubs.length > 0) {
+                        html += `<div id="${childContainerId}" class="pl-3 border-l-2 border-indigo-600/40 space-y-1.5 mt-2 pt-1 hidden animate-fadeIn">`;
+                        
+                        matchedSubs.forEach(sub => {
+                            html += `
+                                <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2 flex justify-between items-center text-xs">
+                                    <div class="truncate max-w-[200px] flex items-center space-x-1.5">
+                                        <span class="text-amber-400">📄</span>
+                                        <span class="font-semibold text-slate-300 truncate text-[11px]">${sub.filename}</span>
+                                    </div>
+                                    <button onclick="deleteInputFile('${sub.filename}')" class="text-red-400 hover:text-red-300 transition text-[10px]">🗑️</button>
+                                </div>
+                            `;
+                        });
+
+                        matchedChildren.forEach(child => {
+                            const childGlobalIndex = globalInputFiles.findIndex(f => f.filename === child.filename);
+                            const childTaskId = historyMap[child.filename];
+
+                            html += `
+                                <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2 flex justify-between items-center text-xs">
+                                    <div class="truncate max-w-[180px] flex items-center space-x-1.5">
+                                        <span class="text-slate-400 text-[10px]">↳</span>
+                                        <span class="font-semibold text-slate-300 truncate text-[11px]">${child.filename}</span>
+                                        <span class="text-slate-500 font-mono text-[10px] shrink-0">(${child.duration.toFixed(1)}s)</span>
+                                    </div>
+                                    <div class="flex items-center space-x-1 shrink-0">
+                            `;
+
+                            if (childTaskId) {
+                                html += `<a href="/editor/${childTaskId}" class="bg-indigo-600 text-white px-2 py-0.5 rounded transition font-mono text-[10px]">Edit</a>`;
+                            } else {
+                                html += `<button data-index="${childGlobalIndex}" onclick="onTranslateBtnClick(this)" class="bg-emerald-700 text-white px-2 py-0.5 rounded transition font-mono text-[10px]">🚀 Dub Video</button>`;
+                            }
+
+                            html += `
+                                        <button onclick="deleteInputFile('${child.filename}')" class="text-red-400 hover:text-red-300 transition text-[10px]">🗑️</button>
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        html += `</div>`;
+                    }
+
+                    html += `</div>`;
+                });
+
+                container.innerHTML = html;
+            } catch (err) {
+                container.innerHTML = `<p class="text-xs text-red-400 text-center py-4">Failed to load input folder files.</p>`;
+            }
+        }
+
+        async function loadHistory() {
+            const container = document.getElementById('historyContainer');
+            try {
+                const res = await fetch('/api/history');
+                const history = await res.json();
+                if (history.length === 0) {
+                    container.innerHTML = `<p class="text-xs text-slate-500 text-center py-4">No previous dubbed projects found.</p>`;
+                    return;
+                }
+                
+                history.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' }));
+
+                container.innerHTML = history.map(item => `
+                    <div class="bg-slate-950 border border-slate-800 rounded-xl p-2.5 flex justify-between items-center text-xs hover:border-slate-700 transition">
+                        <div class="truncate max-w-[180px] md:max-w-xs">
+                            <span class="font-bold text-slate-200 truncate">${item.filename}</span>
+                            <span class="text-slate-500 ml-2 font-mono text-[10px]">${item.updated_at}</span>
+                        </div>
+                        <div class="flex items-center space-x-1.5 shrink-0">
+                            <a href="/editor/${item.task_id}" class="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded transition font-mono text-[10px]">Edit</a>
+                            <button onclick="deleteHistory('${item.task_id}')" class="bg-red-950/60 hover:bg-red-900 text-red-300 px-2 py-1 rounded transition text-[10px] border border-red-900/50">🗑️</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (err) {
+                container.innerHTML = `<p class="text-xs text-red-400 text-center py-4">Failed to load history.</p>`;
+            }
+        }
+
+        async function deleteHistory(taskId) {
+            if (!confirm("Delete project?")) return;
+            try {
+                await fetch(`/api/history/${taskId}`, { method: 'DELETE' });
+                loadHistory();
+                loadInputFiles();
+            } catch (err) {
+                alert("Failed to delete project.");
+            }
+        }
+
+        function toggleChildren(containerId, btn) {
+            const container = document.getElementById(containerId);
+            const spanArrow = btn.querySelector('span:last-child');
+            
+            if (container.classList.contains('hidden')) {
+                container.classList.remove('hidden');
+                if (spanArrow) spanArrow.innerText = '▴';
+            } else {
+                container.classList.add('hidden');
+                if (spanArrow) spanArrow.innerText = '▾';
+            }
+        }
+
+        async function deleteInputFile(filename) {
+            if (!confirm(`Delete "${filename}"?`)) return;
+            try {
+                const res = await fetch(`/api/input-files/${encodeURIComponent(filename)}`, {
+                    method: 'DELETE'
+                });
+                const data = await res.json();
+                if (data.success) {
+                    loadInputFiles();
+                    loadHistory();
+                } else {
+                    alert("Failed to delete file.");
+                }
+            } catch (err) {
+                console.error(err);
+                alert("Network error deleting file.");
+            }
+        }
+
+        function onTrimBtnClick(btn) {
+            const index = parseInt(btn.getAttribute('data-index'));
+            const item = globalInputFiles[index];
+            if (item) {
+                openTrimmer(item.filename, item.duration);
+            }
+        }
+
+        function onTranslateBtnClick(btn) {
+            const index = parseInt(btn.getAttribute('data-index'));
+            const item = globalInputFiles[index];
+            if (item) {
+                openTranslateModal(item.filename);
+            }
+        }
+
+        function openTrimmer(filename, duration) {
+            activeTrimFilename = filename;
+            activeTrimDuration = duration;
+
+            document.getElementById('trimmerSubTitle').innerText = `Splitting: ${filename}`;
+            document.getElementById('videoDurationLabel').innerText = `${duration.toFixed(1)}s`;
+            document.getElementById('trimStart').value = 0;
+            document.getElementById('trimEnd').value = Math.min(10, duration).toFixed(1);
+            document.getElementById('trimEnd').max = duration;
+
+            const player = document.getElementById('previewPlayer');
+            player.pause();
+            player.removeAttribute('src');
+            player.innerHTML = `<source src="/input/${encodeURIComponent(filename)}" type="video/mp4">Your browser does not support video preview.`;
+            player.load();
+
+            document.getElementById('trimmerCard').classList.remove('hidden');
+            document.getElementById('trimmerCard').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function closeTrimmer() {
+            activeTrimFilename = null;
+            const player = document.getElementById('previewPlayer');
+            player.pause();
+            player.removeAttribute('src');
+            document.getElementById('trimmerCard').classList.add('hidden');
+        }
+
+        async function executeSplitAction() {
+            if (!activeTrimFilename) return;
+
+            if (currentSplitMode === 'manual') {
+                const start = parseFloat(document.getElementById('trimStart').value) || 0;
+                const end = parseFloat(document.getElementById('trimEnd').value) || activeTrimDuration;
+
+                try {
+                    const res = await fetch('/api/trim-clip', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            filename: activeTrimFilename,
+                            start: start,
+                            end: end
+                        })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        alert(`✅ Child clip created: ${data.clip_filename}`);
+                        closeTrimmer();
+                        loadInputFiles();
+                    } else {
+                        alert("Failed to trim video clip.");
+                    }
+                } catch (err) {
+                    console.error(err);
+                    alert("Network error trimming video clip.");
+                }
+            } else {
+                const chunkMinutes = parseFloat(document.getElementById('chunkMinutesInput').value) || 5.0;
+                
+                document.getElementById('trimmerCard').classList.add('hidden');
+                document.getElementById('progressCard').classList.remove('hidden');
+                document.getElementById('progressStepText').innerText = `Auto-splitting video & subtitles into chunks...`;
+                document.getElementById('progressBar').style.width = `50%`;
+                document.getElementById('progressPercentageText').innerText = `50%`;
+
+                try {
+                    const res = await fetch('/api/auto-split-video', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            filename: activeTrimFilename,
+                            chunk_minutes: chunkMinutes
+                        })
+                    });
+                    const data = await res.json();
+                    document.getElementById('progressCard').classList.add('hidden');
+                    
+                    if (data.success) {
+                        alert(`✅ Generated ${data.total_parts} chunks with matched subtitles!`);
+                        loadInputFiles();
+                    } else {
+                        alert("Auto-split failed.");
+                    }
+                } catch (err) {
+                    console.error(err);
+                    document.getElementById('progressCard').classList.add('hidden');
+                    alert("Network error during auto-split.");
+                }
+            }
+        }
+
+        async function openTranslateModal(filename) {
+            activeTranslateFilename = filename;
+            document.getElementById('translateModalFilename').innerText = `File: ${filename}`;
+            document.getElementById('pastedScriptInput').value = ''; // Reset pasted box
+            
+            try {
+                const res = await fetch('/api/input-subtitles');
+                const subtitles = await res.json();
+                const selectEl = document.getElementById('subtitleSelect');
+                
+                let optionsHtml = `<option value="">-- Use Speech Recognition (Whisper STT) --</option>`;
+                subtitles.forEach(sub => {
+                    const baseVideo = filename.split('.')[0];
+                    const baseSub = sub.split('.')[0];
+                    const isSelected = baseVideo === baseSub || sub.includes(baseVideo) ? 'selected' : '';
+                    optionsHtml += `<option value="${sub}" ${isSelected}>📄 ${sub}</option>`;
+                });
+                selectEl.innerHTML = optionsHtml;
+            } catch (err) {
+                console.error("Failed to load subtitles list:", err);
+            }
+
+            document.getElementById('translateModalCard').classList.remove('hidden');
+            document.getElementById('translateModalCard').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function closeTranslateModal() {
+            activeTranslateFilename = null;
+            document.getElementById('translateModalCard').classList.add('hidden');
+        }
+
+        async function confirmAndStartTranslation() {
+            if (!activeTranslateFilename) {
+                alert("No file selected.");
+                return;
+            }
+
+            const filenameToProcess = activeTranslateFilename;
+            const sourceLang = document.getElementById('sourceLangSelect').value;
+            const voiceMode = document.getElementById('voiceModeSelect').value;
+            const subtitleFilename = document.getElementById('subtitleSelect').value;
+            const outputMode = document.getElementById('outputModeSelect').value;
+            const pastedScript = document.getElementById('pastedScriptInput').value.trim();
+
+            closeTranslateModal();
+
+            document.getElementById('uploadCard').classList.add('hidden');
+            document.getElementById('progressCard').classList.remove('hidden');
+
+            try {
+                const res = await fetch('/api/translate-file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        filename: filenameToProcess,
+                        source_lang: sourceLang,
+                        voice_mode: voiceMode,
+                        subtitle_filename: subtitleFilename ? subtitleFilename : null,
+                        output_mode: outputMode,
+                        pasted_script: pastedScript ? pastedScript : null
+                    })
+                });
+                const data = await res.json();
+                if (data.task_id) {
+                    pollStatus(data.task_id);
+                } else {
+                    alert("Failed to start dubbing pipeline.");
+                    document.getElementById('progressCard').classList.add('hidden');
+                    document.getElementById('uploadCard').classList.remove('hidden');
+                }
+            } catch (err) {
+                console.error(err);
+                alert("Network error starting translation.");
+                document.getElementById('progressCard').classList.add('hidden');
+                document.getElementById('uploadCard').classList.remove('hidden');
+            }
+        }
+
+        async function pollStatus(taskId) {
+            const interval = setInterval(async () => {
+                try {
+                    const res = await fetch(`/api/status/${taskId}`);
+                    const status = await res.json();
+
+                    document.getElementById('progressStepText').innerText = status.step || "Processing...";
+                    const pct = status.progress || 0;
+                    document.getElementById('progressBar').style.width = `${pct}%`;
+                    document.getElementById('progressPercentageText').innerText = `${pct}%`;
+
+                    if (status.status === 'completed') {
+                        clearInterval(interval);
+                        window.location.href = `/editor/${taskId}`;
+                    } else if (status.status === 'failed') {
+                        clearInterval(interval);
+                        alert("Error: " + status.step);
+                        document.getElementById('progressCard').classList.add('hidden');
+                        document.getElementById('uploadCard').classList.remove('hidden');
+                    }
+                } catch (err) {
+                    console.error("Polling error:", err);
+                }
+            }, 2000);
+        }
+
+        window.onload = () => {
+            loadInputFiles();
+            loadHistory();
+        };
+    </script>
+</body>
+</html>

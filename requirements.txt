@@ -1,0 +1,13 @@
+deep-translator
+faster-whisper
+moviepy
+edge-tts
+torch
+transformers
+demucs
+
+fastapi
+uvicorn
+python-multipart
+jinja2
+yt-dlp[curl-cffi]
