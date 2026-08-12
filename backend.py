@@ -301,6 +301,17 @@ def apply_clip_volume(clip, factor):
         return clip.with_volume_scaling(factor)
     return clip
 
+# ➕ ADD THESE TWO COMPATIBILITY HELPERS:
+def apply_clip_duration(clip, duration):
+    if hasattr(clip, "with_duration"):
+        return clip.with_duration(duration)
+    return clip.set_duration(duration)
+
+def apply_clip_audio(video_clip, audio_clip):
+    if hasattr(video_clip, "with_audio"):
+        return video_clip.with_audio(audio_clip)
+    return video_clip.set_audio(audio_clip)
+
 def merge_with_realtime_progress(task_id: str, video_path: str, background_audio_path: str, audio_segments: list, output_path: str, bg_volume: float = 0.7, voice_volume: float = 1.5):
     if not audio_segments:
         raise RuntimeError("❌ No voiceover segments available to merge.")
@@ -333,8 +344,8 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
                 v_clip = apply_clip_volume(v_clip, voice_volume)
                 audio_clips.append(v_clip)
 
-        final_audio = CompositeAudioClip(audio_clips).set_duration(total_duration)
-        final_video = video_clip.set_audio(final_audio)
+        final_audio = apply_clip_duration(CompositeAudioClip(audio_clips), total_duration)
+        final_video = apply_clip_audio(video_clip, final_audio)
 
         task_data[task_id]["status"] = {"status": "processing", "step": "Rendering final dubbed video...", "progress": 90}
         save_task_to_disk(task_id)
