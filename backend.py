@@ -460,6 +460,22 @@ def sanitize_segments(segments: list) -> list:
             current_seg["end"] = max(current_seg["start"] + 0.1, next_seg["start"] - 0.03)
     return segments
 
+def split_srt_for_clip(source_srt, output_srt, start_time, end_time):
+    if not os.path.exists(source_srt):
+        return
+    segments = parse_srt(source_srt)
+    new_segments = []
+    for seg in segments:
+        if seg["start"] >= start_time and seg["end"] <= end_time:
+            new_segments.append({
+                "start": seg["start"] - start_time,
+                "end": seg["end"] - start_time,
+                "text": seg["text"]
+            })
+    with open(output_srt, "w", encoding="utf-8") as f:
+        for i, seg in enumerate(new_segments, 1):
+            f.write(f"{i}\n{format_time(seg['start'])} --> {format_time(seg['end'])}\n{seg['text']}\n\n")
+
 def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output_path: str, filename: str, subtitle_filename: Optional[str] = None, output_mode: str = "both", voice_mode: str = "auto"):
     try:
         translator = KhmerTranslator()
@@ -681,6 +697,18 @@ async def trim_clip(req: TrimClipRequest):
     )
     if res.returncode != 0:
         raise HTTPException(status_code=500, detail="FFmpeg failed to trim video clip.")
+
+    # 🌟 Flexible Subtitle Lookup (Handles .srt, .vtt, and language-tagged subtitles like .zh-Hant.srt)
+    source_srt = None
+    clean_base = base_name.split('.')[0] # Removes extra dots if present
+    for f in os.listdir("input"):
+        if f.lower().endswith(('.srt', '.vtt')) and clean_base in f:
+            source_srt = os.path.join("input", f)
+            break
+
+    if source_srt and os.path.exists(source_srt):
+        target_srt_name = f"clip_{clip_id}_{clean_base}.srt"
+        split_srt_for_clip(source_srt, os.path.join("input", target_srt_name), req.start, req.end)
 
     return {
         "success": True,
