@@ -87,11 +87,9 @@
                             
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                                 <div class="space-y-1">
-                                    <label class="block text-[10px] text-slate-400 font-mono uppercase">Video Quality</label>
+                                    <label class="block text-[10px] text-slate-400 font-mono uppercase">Exact Video Quality</label>
                                     <select id="urlQualitySelect" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-white focus:outline-none focus:border-indigo-500">
-                                        <option value="best" selected>🌟 Best Available (1080p / 2K / 4K)</option>
-                                        <option value="1080">📺 Max 1080p (Full HD)</option>
-                                        <option value="720">⚡ Max 720p (Fast Download)</option>
+                                        <option value="best" selected>🌟 Best Available (Max Quality)</option>
                                     </select>
                                 </div>
                                 <div class="space-y-1">
@@ -104,7 +102,7 @@
 
                             <div class="flex justify-end pt-1">
                                 <button onclick="downloadFromUrl()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-5 py-2 rounded-xl transition shadow flex items-center space-x-1">
-                                    <span>⬇️ Download High-Res Video</span>
+                                    <span>⬇️ Download Selected Quality</span>
                                 </button>
                             </div>
                         </div>
@@ -114,7 +112,7 @@
 
             <!-- DOWNLOAD PROGRESS CARD -->
             <div id="downloadProgressCard" class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-2 hidden text-center animate-fadeIn">
-                <h2 class="text-xs font-bold text-white uppercase font-mono">Downloading High-Quality Video from URL</h2>
+                <h2 class="text-xs font-bold text-white uppercase font-mono">Downloading High-Quality Stream from YouTube</h2>
                 <p id="downloadStepText" class="text-xs text-indigo-300 font-mono">Initializing download stream...</p>
                 <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800 relative">
                     <div id="downloadProgressBar" class="bg-indigo-600 h-full w-0 transition-all duration-300"></div>
@@ -399,14 +397,26 @@
                 const data = await res.json();
                 if (data.success) {
                     document.getElementById('fetchedVideoTitle').innerText = `📹 ${data.title}`;
-                    const selectEl = document.getElementById('urlSubLangSelect');
                     
+                    // Populate dynamically detected qualities
+                    const qualitySelect = document.getElementById('urlQualitySelect');
+                    if (data.qualities && data.qualities.length > 0) {
+                        let qHtml = '';
+                        data.qualities.forEach(q => {
+                            qHtml += `<option value="${q.id}">${q.label}</option>`;
+                        });
+                        qualitySelect.innerHTML = qHtml;
+                    }
+
+                    // Populate subtitles
+                    const selectEl = document.getElementById('urlSubLangSelect');
                     let html = `<option value="">-- No Subtitles (Video Only) --</option>`;
                     data.languages.forEach(lang => {
                         const selected = (lang === 'en' || lang === 'en-US' || lang === 'km') ? 'selected' : '';
                         html += `<option value="${lang}" ${selected}>🌐 Language Code: ${lang}</option>`;
                     });
                     selectEl.innerHTML = html;
+                    
                     document.getElementById('subLangContainer').classList.remove('hidden');
                 } else {
                     alert("Could not fetch video info.");
