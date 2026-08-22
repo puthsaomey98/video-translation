@@ -86,13 +86,13 @@ def clean_youtube_url(url: str) -> str:
         return ""
     url = url.strip()
 
-    # Match YouTube Shorts: https://www.youtube.com/shorts/VIDEO_ID
+    # Match YouTube Shorts or youtu.be links
     shorts_match = re.search(r'(?:youtube\.com/shorts/|youtu\.be/)([\w-]+)', url)
     if shorts_match:
         video_id = shorts_match.group(1)
         return f"https://www.youtube.com/watch?v={video_id}"
 
-    # Match standard watch URLs: https://www.youtube.com/watch?v=VIDEO_ID
+    # Match standard watch URLs
     if "youtube.com/watch" in url and "v=" in url:
         base_url, _, query = url.partition("?")
         params = query.split("&")
@@ -104,17 +104,17 @@ def clean_youtube_url(url: str) -> str:
     return url
 
 def get_common_ydl_opts(download_id: Optional[str] = None) -> dict:
-    """Provides resilient yt-dlp configurations that bypass HTTP 403 errors and support Shorts."""
+    """Provides resilient yt-dlp configurations that support High-Res & Shorts."""
     opts = {
         'quiet': True,
         'no_warnings': True,
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
         },
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web'],
+                'player_client': ['ios', 'web', 'android'],
                 'player_skip': ['webpage', 'configs'],
             }
         },
@@ -132,7 +132,6 @@ def get_video_duration(video_path: str) -> float:
         mtime = os.path.getmtime(video_path) if os.path.exists(video_path) else 0
         filename = os.path.basename(video_path)
 
-        # ⚡ Instant Return from Memory Cache
         if filename in DURATION_CACHE and DURATION_CACHE[filename]["mtime"] == mtime:
             return DURATION_CACHE[filename]["duration"]
 
@@ -153,7 +152,6 @@ def get_video_duration(video_path: str) -> float:
             if val != "N/A":
                 duration = float(val)
 
-        # Fallback to MoviePy ONLY if ffprobe fails
         if duration == 0.0 and video_path.lower().endswith(('.mp4', '.mov', '.mkv', '.avi', '.webm')):
             try:
                 with VideoFileClip(video_path) as clip:
@@ -161,7 +159,6 @@ def get_video_duration(video_path: str) -> float:
             except Exception:
                 duration = 0.0
 
-        # Cache Result
         DURATION_CACHE[filename] = {"mtime": mtime, "duration": duration}
         return duration
 
@@ -216,10 +213,6 @@ def safe_translate_and_clean(translator, text: str, source_lang: str) -> str:
     return clean_source if clean_source.strip() else text.strip()
 
 def process_pasted_script_to_srt(pasted_text: str, video_path: str, output_srt_path: str) -> bool:
-    """
-    Saves pasted text as an SRT file.
-    If plain text, calculates distributed timing across video duration.
-    """
     if not pasted_text or not pasted_text.strip():
         return False
 
@@ -821,13 +814,13 @@ def ydl_progress_hook(d, download_id):
         download_tasks[download_id] = {
             "status": "downloading",
             "progress": int(percent),
-            "step": f"Downloading video stream... ({clean_percent.strip()})"
+            "step": f"Downloading high-quality video stream... ({clean_percent.strip()})"
         }
     elif d['status'] == 'finished':
         download_tasks[download_id] = {
             "status": "processing",
             "progress": 95,
-            "step": "Finalizing downloaded media file..."
+            "step": "Finalizing and merging media streams..."
         }
 
 class URLInfoRequest(BaseModel):
@@ -869,33 +862,41 @@ async def fetch_url_info(req: URLInfoRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-async def background_download_video(download_id: str, url: str, sublang: Optional[str] = None):
+class URLDownloadRequest(BaseModel):
+    url: str
+    sublang: Optional[str] = None
+    quality: Optional[str] = "best"
+
+async def background_download_video(download_id: str, url: str, sublang: Optional[str] = None, quality: Optional[str] = "best"):
     try:
         download_tasks[download_id] = {"status": "downloading", "progress": 0, "step": "Connecting to URL..."}
         cleaned_url = clean_youtube_url(url)
         temp_id = download_id
         output_template = os.path.join("input", f"{temp_id}_%(title).100B.%(ext)s")
         
-        # If user explicitly requested Khmer, request it; otherwise default safely
-        languages_to_fetch = [sublang] if sublang and sublang.strip() else ['en', 'en-US', 'zh', 'ja']
+        languages_to_fetch = [sublang] if sublang and sublang.strip() else ['en', 'en-US', 'zh', 'ja', 'ko']
         
+        # High quality format selector
+        if quality == "1080":
+            format_str = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best'
+        elif quality == "720":
+            format_str = 'bestvideo[height<=720]+bestaudio/best[height<=720]/best'
+        else:
+            format_str = 'bestvideo+bestaudio/best'
+
         ydl_opts = get_common_ydl_opts(download_id)
         ydl_opts.update({
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best',
+            'format': format_str,
             'merge_output_format': 'mp4',
             'outtmpl': output_template,
             'noplaylist': True,
-            
-            # --- Subtitle Settings & Error Bypasses ---
             'writesubtitles': True,
             'writeautomaticsub': True,
             'subtitleslangs': languages_to_fetch,
             'subtitlesformat': 'srt/vtt/best',
-            'ignoreerrors': 'only_download',      # Do not crash if subtitles hit 429
-            'extractor_retries': 3,               # Retry on connection/API hiccups
-            'sleep_interval_subtitles': 2,        # Pause 2s to prevent 429 on /timedtext
-            
-            # --- Postprocessors ---
+            'ignoreerrors': 'only_download',
+            'extractor_retries': 3,
+            'sleep_interval_subtitles': 2,
             'postprocessors': [{
                 'key': 'FFmpegSubtitlesConvertor',
                 'format': 'srt',
@@ -906,11 +907,9 @@ async def background_download_video(download_id: str, url: str, sublang: Optiona
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(cleaned_url, download=True)
                 if not info:
-                    raise RuntimeError("Failed to extract video information.")
-                    
+                    raise RuntimeError("Failed to fetch video information from stream.")
                 filename = ydl.prepare_filename(info)
                 
-                # Check for merged output
                 base, _ = os.path.splitext(filename)
                 expected_mp4 = base + ".mp4"
                 if os.path.exists(expected_mp4):
@@ -937,10 +936,6 @@ async def background_download_video(download_id: str, url: str, sublang: Optiona
             "step": str(e)
         }
 
-class URLDownloadRequest(BaseModel):
-    url: str
-    sublang: Optional[str] = None
-
 @app.post("/api/download-url-preview")
 async def download_url_preview(background_tasks: BackgroundTasks, req: URLDownloadRequest):
     if not yt_dlp:
@@ -948,7 +943,7 @@ async def download_url_preview(background_tasks: BackgroundTasks, req: URLDownlo
     
     download_id = str(os.urandom(4).hex())
     download_tasks[download_id] = {"status": "queued", "progress": 0, "step": "In queue..."}
-    background_tasks.add_task(background_download_video, download_id, req.url, req.sublang)
+    background_tasks.add_task(background_download_video, download_id, req.url, req.sublang, req.quality)
     return {"download_id": download_id}
 
 @app.get("/api/download-status/{download_id}")

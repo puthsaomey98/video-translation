@@ -72,28 +72,40 @@
                 <!-- URL Download Form -->
                 <div id="tabUrlContent" class="space-y-3 hidden">
                     <div class="space-y-2">
-                        <label class="block text-[10px] font-semibold text-slate-400 uppercase font-mono tracking-wider">Video Source Link</label>
+                        <label class="block text-[10px] font-semibold text-slate-400 uppercase font-mono tracking-wider">Video Source Link (Supports 1080p, 4K & Shorts)</label>
                         <div class="flex space-x-2">
-                            <input type="url" id="videoUrlInput" placeholder="https://www.youtube.com/watch?v=..." 
+                            <input type="url" id="videoUrlInput" placeholder="https://www.youtube.com/watch?v=... or https://youtube.com/shorts/..." 
                                 class="flex-1 bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 transition">
                             <button onclick="fetchUrlSubtitles()" id="fetchUrlBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs px-4 py-2 rounded-xl transition shadow flex items-center space-x-1 shrink-0">
-                                <span>🔍 Check Subs</span>
+                                <span>🔍 Check Info</span>
                             </button>
                         </div>
 
-                        <!-- Subtitle Language Selector Box -->
-                        <div id="subLangContainer" class="space-y-2.5 hidden bg-slate-950 p-3.5 rounded-xl border border-slate-800 animate-fadeIn">
+                        <!-- Subtitle & Quality Language Selector Box -->
+                        <div id="subLangContainer" class="space-y-3 hidden bg-slate-950 p-3.5 rounded-xl border border-slate-800 animate-fadeIn">
                             <p id="fetchedVideoTitle" class="text-xs font-bold text-indigo-300 truncate"></p>
-                            <div class="space-y-1">
-                                <label class="block text-[10px] text-slate-400 font-mono uppercase">Select Subtitle Track</label>
-                                <div class="flex space-x-2">
-                                    <select id="urlSubLangSelect" class="flex-1 bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-white focus:outline-none focus:border-indigo-500">
+                            
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                                <div class="space-y-1">
+                                    <label class="block text-[10px] text-slate-400 font-mono uppercase">Video Quality</label>
+                                    <select id="urlQualitySelect" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-white focus:outline-none focus:border-indigo-500">
+                                        <option value="best" selected>🌟 Best Available (1080p / 2K / 4K)</option>
+                                        <option value="1080">📺 Max 1080p (Full HD)</option>
+                                        <option value="720">⚡ Max 720p (Fast Download)</option>
+                                    </select>
+                                </div>
+                                <div class="space-y-1">
+                                    <label class="block text-[10px] text-slate-400 font-mono uppercase">Subtitle Track</label>
+                                    <select id="urlSubLangSelect" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-white focus:outline-none focus:border-indigo-500">
                                         <option value="">-- No Subtitles (Video Only) --</option>
                                     </select>
-                                    <button onclick="downloadFromUrl()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2 rounded-xl transition shadow shrink-0">
-                                        ⬇️ Download
-                                    </button>
                                 </div>
+                            </div>
+
+                            <div class="flex justify-end pt-1">
+                                <button onclick="downloadFromUrl()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-5 py-2 rounded-xl transition shadow flex items-center space-x-1">
+                                    <span>⬇️ Download High-Res Video</span>
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -102,7 +114,7 @@
 
             <!-- DOWNLOAD PROGRESS CARD -->
             <div id="downloadProgressCard" class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-2 hidden text-center animate-fadeIn">
-                <h2 class="text-xs font-bold text-white uppercase font-mono">Downloading Content from URL</h2>
+                <h2 class="text-xs font-bold text-white uppercase font-mono">Downloading High-Quality Video from URL</h2>
                 <p id="downloadStepText" class="text-xs text-indigo-300 font-mono">Initializing download stream...</p>
                 <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800 relative">
                     <div id="downloadProgressBar" class="bg-indigo-600 h-full w-0 transition-all duration-300"></div>
@@ -201,7 +213,6 @@
                     <p id="translateModalFilename" class="text-xs text-indigo-300 font-mono mt-1 truncate"></p>
                 </div>
 
-                <!-- Auto Voice & Naturalization Info Box -->
                 <div class="bg-emerald-950/40 border border-emerald-800/60 rounded-xl p-3 text-[11px] text-emerald-300 flex items-start space-x-2">
                     <span class="text-sm shrink-0">✨</span>
                     <div>
@@ -224,7 +235,6 @@
                         </select>
                     </div>
 
-                    <!-- Speaker Voice Mode Selection -->
                     <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
                         <label class="block text-[10px] text-slate-400 font-mono uppercase">Speaker Voice Mode</label>
                         <select id="voiceModeSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:border-indigo-500">
@@ -241,7 +251,6 @@
                         </select>
                     </div>
 
-                    <!-- Direct Script / Subtitle Paste Box -->
                     <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
                         <div class="flex justify-between items-center">
                             <label class="block text-[10px] text-slate-400 font-mono uppercase">Or Paste Subtitle / Script Text</label>
@@ -406,7 +415,7 @@
                 console.error(err);
                 alert("Network error checking URL.");
             } finally {
-                btn.innerText = "Check Subs";
+                btn.innerText = "Check Info";
                 btn.disabled = false;
             }
         }
@@ -415,6 +424,8 @@
             const url = document.getElementById('videoUrlInput').value.trim();
             const sublangSelect = document.getElementById('urlSubLangSelect');
             const sublang = sublangSelect ? sublangSelect.value : null;
+            const qualitySelect = document.getElementById('urlQualitySelect');
+            const quality = qualitySelect ? qualitySelect.value : "best";
             
             if (!url) {
                 alert("Please enter a valid URL.");
@@ -431,7 +442,8 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         url: url, 
-                        sublang: sublang ? sublang : null 
+                        sublang: sublang ? sublang : null,
+                        quality: quality
                     })
                 });
                 const data = await res.json();
@@ -800,7 +812,7 @@
         async function openTranslateModal(filename) {
             activeTranslateFilename = filename;
             document.getElementById('translateModalFilename').innerText = `File: ${filename}`;
-            document.getElementById('pastedScriptInput').value = ''; // Reset pasted box
+            document.getElementById('pastedScriptInput').value = '';
             
             try {
                 const res = await fetch('/api/input-subtitles');
