@@ -6,6 +6,7 @@ import re
 import json
 import time
 import platform
+import urllib.request
 import numpy as np
 from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -88,15 +89,15 @@ def load_task_from_disk(task_id: str):
             print(f"⚠️ Warning: Could not load history for {task_id}: {e}")
     return None
 
-def clean_youtube_url(url: str) -> str:
+def clean_media_url(url: str) -> str:
     if not url:
         return ""
     url = url.strip()
 
+    # YouTube Shorts & Watch URLs
     shorts_match = re.search(r'(?:youtube\.com/shorts/|youtu\.be/)([\w-]+)', url)
     if shorts_match:
-        video_id = shorts_match.group(1)
-        return f"https://www.youtube.com/watch?v={video_id}"
+        return f"https://www.youtube.com/watch?v={shorts_match.group(1)}"
 
     if "youtube.com/watch" in url and "v=" in url:
         base_url, _, query = url.partition("?")
@@ -106,6 +107,7 @@ def clean_youtube_url(url: str) -> str:
             return base_url + "?" + clean_params[0]
         return base_url
 
+    # Retain full URL queries for CDN streams (e.g. 71edge.com, .f4v, .m3u8) as tokens are in parameters
     return url
 
 def get_video_dimensions_and_codec(video_path: str) -> dict:
@@ -139,12 +141,16 @@ def get_common_ydl_opts(download_id: Optional[str] = None) -> dict:
         'ffmpeg_location': FFMPEG_PATH,
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
             'Sec-Fetch-Mode': 'navigate',
+        },
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['web', 'mweb', 'ios', 'android'],
+            }
         },
     }
 
-    # Automatically load cookies.txt from working directory
     cookie_paths = [
         os.path.join(os.getcwd(), "cookies.txt"),
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
@@ -167,26 +173,25 @@ def safe_extract_info(url: str, is_download: bool = False, custom_opts: dict = N
         base_opts['format'] = 'bv*+ba/b'
         base_opts['ignore_no_formats_error'] = True
 
-    strategies = [
-        {'extractor_args': {'youtube': {'player_client': ['web_creator', 'ios', 'android', 'web']}}},
-        {'extractor_args': {'youtube': {'player_client': ['ios', 'android']}}},
-        {'extractor_args': {'youtube': {'player_client': ['web']}}}
-    ]
-
-    last_err = None
-    for strat in strategies:
+    try:
+        with yt_dlp.YoutubeDL(base_opts) as ydl:
+            info = ydl.extract_info(url, download=is_download)
+            if info is not None:
+                return info, ydl
+    except Exception as e:
+        fallback_opts = dict(base_opts)
+        fallback_opts['extractor_args'] = {
+            'youtube': {
+                'player_client': ['ios', 'android', 'mweb'],
+            }
+        }
         try:
-            run_opts = dict(base_opts)
-            run_opts.update(strat)
-            with yt_dlp.YoutubeDL(run_opts) as ydl:
-                info = ydl.extract_info(url, download=is_download)
+            with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
+                info = ydl_fb.extract_info(url, download=is_download)
                 if info is not None:
-                    return info, ydl
-        except Exception as e:
-            last_err = e
-            continue
-
-    raise RuntimeError(f"Could not extract video stream: {last_err}")
+                    return info, ydl_fb
+        except Exception as fb_err:
+            raise RuntimeError(f"Error fetching stream info: {e} (Fallback: {fb_err})")
 
 def get_video_duration(video_path: str) -> float:
     if not video_path or video_path.lower().endswith(('.srt', '.vtt', '.txt', '.json')):
@@ -934,8 +939,17 @@ async def fetch_url_info(req: URLInfoRequest):
     if not yt_dlp:
         raise HTTPException(status_code=500, detail="yt-dlp is not installed.")
     try:
-        cleaned_url = clean_youtube_url(req.url)
+        cleaned_url = clean_media_url(req.url)
         
+        # Direct stream links (CDN, .m3u8, .f4v)
+        if any(ext in cleaned_url.lower() for ext in [".f4v", ".m3u8", ".mpd", "71edge.com", "googlevideo.com"]):
+            return {
+                "success": True,
+                "title": "Direct Media Stream (Auto Source)",
+                "languages": ["zh", "en", "km"],
+                "qualities": [{"id": "best", "label": "🌟 Source Stream Resolution"}]
+            }
+
         def get_info():
             info, _ = safe_extract_info(cleaned_url, is_download=False, custom_opts={'skip_download': True})
             return info
@@ -1004,14 +1018,90 @@ class URLDownloadRequest(BaseModel):
 
 async def background_download_video(download_id: str, url: str, sublang: Optional[str] = None, quality: Optional[str] = "best"):
     try:
-        download_tasks[download_id] = {"status": "downloading", "progress": 0, "step": "Connecting to mobile video stream..."}
-        cleaned_url = clean_youtube_url(url)
+        download_tasks[download_id] = {"status": "downloading", "progress": 0, "step": "Connecting to video stream..."}
+        cleaned_url = clean_media_url(url)
         temp_id = download_id
+
+        # ⚡ Direct CDN / .f4v / .m3u8 Stream Downloader with Full Browser Headers
+        if any(ext in cleaned_url.lower() for ext in [".f4v", ".m3u8", ".mpd", "71edge.com", "googlevideo.com"]):
+            output_filename = f"{temp_id}_stream_video.mp4"
+            output_path = os.path.join("input", output_filename)
+            temp_raw_file = os.path.join("input", f"{temp_id}_raw.f4v")
+
+            # Determine Referer based on domain
+            referer = "https://www.iqiyi.com/" if "71edge.com" in cleaned_url or "iqiyi" in cleaned_url else "https://www.youtube.com/"
+            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+            header_str = f"Referer: {referer}\r\nUser-Agent: {user_agent}\r\n"
+
+            # Attempt 1: FFmpeg with injected headers
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-headers", header_str,
+                "-i", cleaned_url,
+                "-c", "copy",
+                "-movflags", "+faststart",
+                output_path
+            ]
+            res = await asyncio.to_thread(subprocess.run, cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            # Attempt 2: Fallback to Python streaming download if FFmpeg fails
+            if res.returncode != 0 or not os.path.exists(output_path):
+                print(f"⚠️ Notice: FFmpeg direct stream error: {res.stderr[:160]}... Trying chunked Python fetcher...")
+                download_tasks[download_id]["step"] = "Streaming chunked segments via Python buffer..."
+
+                req = urllib.request.Request(
+                    cleaned_url,
+                    headers={
+                        "User-Agent": user_agent,
+                        "Referer": referer,
+                        "Accept": "*/*"
+                    }
+                )
+
+                def run_stream_download():
+                    with urllib.request.urlopen(req, timeout=30) as response, open(temp_raw_file, 'wb') as out_f:
+                        while True:
+                            chunk = response.read(1024 * 512)
+                            if not chunk:
+                                break
+                            out_f.write(chunk)
+
+                await asyncio.to_thread(run_stream_download)
+
+                # Lossless conversion from raw container to standard mp4
+                if os.path.exists(temp_raw_file) and os.path.getsize(temp_raw_file) > 1000:
+                    conv_cmd = [
+                        FFMPEG_PATH, "-y",
+                        "-i", temp_raw_file,
+                        "-c", "copy",
+                        "-movflags", "+faststart",
+                        output_path
+                    ]
+                    subprocess.run(conv_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if os.path.exists(temp_raw_file):
+                        try:
+                            os.remove(temp_raw_file)
+                        except Exception:
+                            pass
+
+            if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
+                raise RuntimeError("Failed to capture video data. The CDN link may have expired or is blocked. Please re-capture a fresh link.")
+
+            duration = get_video_duration(output_path)
+            download_tasks[download_id] = {
+                "status": "completed",
+                "progress": 100,
+                "step": "Download complete!",
+                "temp_filename": output_filename,
+                "duration": duration
+            }
+            return
+
+        # Standard yt-dlp workflow
         output_template = os.path.join("input", f"{temp_id}_%(title).100B.%(ext)s")
-        
         languages_to_fetch = [sublang] if sublang and sublang.strip() else ['en', 'en-US', 'zh', 'ja', 'ko']
         
-        # Robust format sorting that never throws syntax or format availability errors
         if quality and quality != "best" and quality.isdigit():
             target_res = int(quality)
             format_sort_rules = [f'res:{target_res}', 'fps', 'codec:vp9:av01:h264', 'size', 'br']
