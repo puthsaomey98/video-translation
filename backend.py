@@ -402,7 +402,7 @@ def apply_clip_audio(video_clip, audio_clip):
         return video_clip.with_audio(audio_clip)
     return video_clip.set_audio(audio_clip)
 
-def merge_with_realtime_progress(task_id: str, video_path: str, background_audio_path: str, audio_segments: list, output_path: str, bg_volume: float = 0.7, voice_volume: float = 1.5):
+def merge_with_realtime_progress(task_id: str, video_path: str, background_audio_path: str, audio_segments: list, output_path: str, bg_volume: float = 0.4, voice_volume: float = 1.5):
     if not audio_segments:
         raise RuntimeError("❌ No voiceover segments available to merge.")
 
@@ -719,7 +719,7 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
             }
             save_task_to_disk(task_id)
 
-        bg_vol = task_data[task_id].get("bg_volume", 0.7)
+        bg_vol = task_data[task_id].get("bg_volume", 0.4)
         voice_vol = task_data[task_id].get("voice_volume", 1.5)
 
         merge_with_realtime_progress(
@@ -879,7 +879,7 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
         "task_id": task_id,
         "filename": filename,
         "status": {"status": "queued", "step": "In queue...", "progress": 0},
-        "bg_volume": 0.7,
+        "bg_volume": 0.4,
         "voice_volume": 1.5,
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
     }
@@ -1244,7 +1244,7 @@ async def get_editor_data(task_id: str):
     return {
         "filename": tdata.get("filename", "Project Workspace"),
         "segments": tdata.get("segments", []),
-        "bg_volume": tdata.get("bg_volume", 0.7),
+        "bg_volume": tdata.get("bg_volume", 0.4),
         "voice_volume": tdata.get("voice_volume", 1.5),
         "output_video": f"/output/{os.path.basename(tdata.get('output_path', ''))}",
         "background_audio": tdata.get("public_bg_audio")
@@ -1259,7 +1259,7 @@ class SegmentItem(BaseModel):
 
 class ReRenderRequest(BaseModel):
     segments: List[SegmentItem]
-    bg_volume: float = 0.7
+    bg_volume: float = 0.4
     voice_volume: float = 1.5
 
 @app.post("/api/test-segment/{task_id}/{index}")
@@ -1287,7 +1287,7 @@ async def re_render_task(task_id: str, payload: dict):
         return {"success": False, "error": "Task not found"}
     
     segments = payload.get("segments", [])
-    bg_volume = payload.get("bg_volume", 0.7)
+    bg_volume = payload.get("bg_volume", 0.4)
     voice_volume = payload.get("voice_volume", 1.5)
     
     tdata["bg_volume"] = bg_volume
