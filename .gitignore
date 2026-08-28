@@ -4,6 +4,7 @@
 
 # Temporary audio separation output
 /temp_separated/
+/subtitles/
 
 # Executables & binaries
 *.exe

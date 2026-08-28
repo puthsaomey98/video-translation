@@ -25,6 +25,16 @@
         </div>
 
         <div class="flex items-center space-x-3">
+            <!-- Audio Output Preset Selector -->
+            <div class="flex items-center space-x-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
+                <span class="text-[10px] text-slate-400 font-mono px-1">Mix Preset:</span>
+                <select id="audioModePreset" onchange="applyAudioModePreset(this.value)" class="bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1 font-medium focus:outline-none focus:border-indigo-500">
+                    <option value="both" selected>🎵 BGM + 🎙️ Voice</option>
+                    <option value="bg_only">🎶 Sound Only Background</option>
+                    <option value="voice_only">🎙️ Voice Only (No BGM)</option>
+                </select>
+            </div>
+
             <button onclick="autoTrimAllVoices()" class="bg-amber-600 hover:bg-amber-500 text-white text-xs px-3.5 py-1.5 rounded-lg transition shadow flex items-center space-x-1 font-mono">
                 <span>✂️ Auto-Trim Overlaps</span>
             </button>
@@ -93,7 +103,7 @@
                     </div>
                     <div class="flex items-center space-x-2">
                         <span class="text-slate-400">Voice Vol:</span>
-                        <input type="range" id="voiceVolume" min="0.5" max="3.0" step="0.1" value="1.5" class="w-20 accent-indigo-500" oninput="document.getElementById('voiceVolVal').innerText=this.value">
+                        <input type="range" id="voiceVolume" min="0.0" max="3.0" step="0.1" value="1.5" class="w-20 accent-indigo-500" oninput="document.getElementById('voiceVolVal').innerText=this.value">
                         <span id="voiceVolVal" class="text-indigo-400 font-mono text-[10px]">1.5</span>
                     </div>
                 </div>
@@ -141,6 +151,13 @@
         let activeTestAudio = null;
         let lastActiveIndex = -1;
 
+        function getSafeMediaUrl(rawPath) {
+            if (!rawPath) return "";
+            const cleanPath = rawPath.startsWith('/') ? rawPath.slice(1) : rawPath;
+            const parts = cleanPath.split('/');
+            return '/' + parts.map(p => encodeURIComponent(p)).join('/') + `?t=${Date.now()}`;
+        }
+
         function getTimelineDuration() {
             const videoEl = document.getElementById('videoPreview');
             if (videoEl && !isNaN(videoEl.duration) && videoEl.duration > 0) {
@@ -162,21 +179,28 @@
                 const bgAudioEl = document.getElementById('bgAudioNode');
                 
                 videoEl.pause();
-                // Encode URL to safely handle Chinese characters, emojis, spaces, and brackets
-                const safeVideoUrl = encodeURI(data.output_video) + `?t=${Date.now()}`;
+                
+                // Safely encode entire path URL to prevent 404s on hashtags (#) and special symbols
+                const safeVideoUrl = getSafeMediaUrl(data.output_video);
                 videoEl.src = safeVideoUrl;
                 videoEl.load();
 
                 videoEl.onerror = () => {
-                    const errCode = videoEl.error ? videoEl.error.code : 'unknown';
-                    console.error("❌ HTML5 Video Error Code:", errCode);
-                    if (errCode === 4) {
-                        alert("⚠️ Browser Error: The video format is not supported or the render is incomplete. Please re-export video.");
+                    const err = videoEl.error;
+                    let errMsg = "Unknown error";
+                    if (err) {
+                        switch (err.code) {
+                            case 1: errMsg = "Aborted by user"; break;
+                            case 2: errMsg = "Network error / File not found (404)"; break;
+                            case 3: errMsg = "Decode error (Corrupted file)"; break;
+                            case 4: errMsg = "Source format/codec not supported or file missing"; break;
+                        }
                     }
+                    console.error(`❌ HTML5 Video Error [Code ${err ? err.code : '?' }]: ${errMsg}`);
                 };
 
                 if (data.background_audio) {
-                    bgAudioEl.src = data.background_audio + `?t=${Date.now()}`;
+                    bgAudioEl.src = getSafeMediaUrl(data.background_audio);
                 }
 
                 videoEl.onloadedmetadata = () => {
@@ -223,12 +247,39 @@
                 document.getElementById('bgVolVal').innerText = initialBgVol;
                 if (bgAudioEl.src) bgAudioEl.volume = initialBgVol;
 
-                document.getElementById('voiceVolume').value = data.voice_volume !== undefined ? data.voice_volume : 1.5;
-                document.getElementById('voiceVolVal').innerText = data.voice_volume !== undefined ? data.voice_volume : 1.5;
+                const initialVoiceVol = data.voice_volume !== undefined ? data.voice_volume : 1.5;
+                document.getElementById('voiceVolume').value = initialVoiceVol;
+                document.getElementById('voiceVolVal').innerText = initialVoiceVol;
+
+                if (data.audio_mode) {
+                    const presetSelect = document.getElementById('audioModePreset');
+                    if (presetSelect) presetSelect.value = data.audio_mode === 'bg_only' ? 'bg_only' : (data.audio_mode === 'voice_only' ? 'voice_only' : 'both');
+                }
 
             } catch (err) {
                 console.error("Failed to load editor data:", err);
             }
+        }
+
+        function applyAudioModePreset(mode) {
+            const bgVolInput = document.getElementById('bgVolume');
+            const voiceVolInput = document.getElementById('voiceVolume');
+            const bgAudioEl = document.getElementById('bgAudioNode');
+
+            if (mode === 'bg_only') {
+                bgVolInput.value = 0.7;
+                voiceVolInput.value = 0.0;
+            } else if (mode === 'voice_only') {
+                bgVolInput.value = 0.0;
+                voiceVolInput.value = 1.5;
+            } else {
+                bgVolInput.value = 0.4;
+                voiceVolInput.value = 1.5;
+            }
+
+            document.getElementById('bgVolVal').innerText = bgVolInput.value;
+            document.getElementById('voiceVolVal').innerText = voiceVolInput.value;
+            if (bgAudioEl) bgAudioEl.volume = parseFloat(bgVolInput.value);
         }
 
         function togglePlayPause() {
@@ -559,10 +610,13 @@
             if (!currentData) return;
             syncInputsToData();
 
+            const presetMode = document.getElementById('audioModePreset').value;
+
             const payload = {
                 segments: currentData.segments,
                 bg_volume: parseFloat(document.getElementById('bgVolume').value),
-                voice_volume: parseFloat(document.getElementById('voiceVolume').value)
+                voice_volume: parseFloat(document.getElementById('voiceVolume').value),
+                audio_mode: presetMode
             };
 
             const statusCard = document.getElementById('statusCard');
@@ -587,11 +641,11 @@
                     statusText.innerText = "✅ Export completed successfully!";
                     downloadContainer.classList.remove('hidden');
                     
-                    const cacheBustUrl = result.output_video + "?t=" + new Date().getTime();
-                    document.getElementById('downloadLink').href = cacheBustUrl;
+                    const safeOutUrl = getSafeMediaUrl(result.output_video);
+                    document.getElementById('downloadLink').href = safeOutUrl;
                     
                     const videoPreview = document.getElementById('videoPreview');
-                    videoPreview.src = cacheBustUrl;
+                    videoPreview.src = safeOutUrl;
                     videoPreview.load();
                 } else {
                     statusText.innerText = "❌ Error: " + result.error;

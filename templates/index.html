@@ -202,7 +202,7 @@
                 </div>
             </div>
 
-            <!-- TRANSLATION LANGUAGE MODAL CARD -->
+            <!-- TRANSLATION CONFIGURATION MODAL CARD -->
             <div id="translateModalCard" class="bg-slate-900 border border-emerald-500/30 rounded-2xl p-5 shadow-2xl space-y-4 hidden animate-fadeIn">
                 <div class="border-b border-slate-800 pb-2.5">
                     <h2 class="text-xs font-bold text-white uppercase font-mono tracking-wider flex items-center space-x-1.5">
@@ -211,12 +211,16 @@
                     <p id="translateModalFilename" class="text-xs text-indigo-300 font-mono mt-1 truncate"></p>
                 </div>
 
-                <div class="bg-emerald-950/40 border border-emerald-800/60 rounded-xl p-3 text-[11px] text-emerald-300 flex items-start space-x-2">
-                    <span class="text-sm shrink-0">✨</span>
-                    <div>
-                        <p class="font-bold">Preserve Background Music Active</p>
-                        <p class="text-[10px] text-emerald-400/80">Separates original audio, preserves background music, and overlays Khmer TTS speaking voice accurately.</p>
-                    </div>
+                <!-- Output Audio Mode Selector Box -->
+                <div class="bg-slate-950 p-3.5 rounded-xl border border-indigo-500/40 space-y-1.5">
+                    <label class="block text-[10px] font-bold text-indigo-300 font-mono uppercase tracking-wider">Audio & Output Generation Mode</label>
+                    <select id="outputModeSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-medium">
+                        <option value="both" selected>🎬 Background Music + Khmer AI Voice + Subtitles</option>
+                        <option value="bg_and_voice">🎧 Background Music + Khmer AI Voice (Audio Dubbed)</option>
+                        <option value="bg_only">🎶 Sound Only Background (Vocal Removed / BGM Track Only)</option>
+                        <option value="voice_only">🎙️ Khmer Voice Only (No Background Music)</option>
+                        <option value="subtitle">📄 Subtitle Only (Khmer .srt Only)</option>
+                    </select>
                 </div>
 
                 <div class="space-y-3 text-xs">
@@ -257,15 +261,6 @@
                         <textarea id="pastedScriptInput" rows="4" 
                             placeholder="Option A: Paste SRT format&#10;1&#10;00:00:00,000 --> 00:00:02,500&#10;សួស្ដីអ្នកទាំងអស់គ្នា!&#10;&#10;Option B: Or paste plain Khmer text line-by-line..." 
                             class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono custom-scrollbar"></textarea>
-                    </div>
-
-                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
-                        <label class="block text-[10px] text-slate-400 font-mono uppercase">Output Generation Mode</label>
-                        <select id="outputModeSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:border-indigo-500">
-                            <option value="both" selected>🎬 Both (Khmer Voice + Subtitles - Synced)</option>
-                            <option value="voice">🎙️ Voice Only (Dubbed Khmer Audio + BGM)</option>
-                            <option value="subtitle">📄 Subtitle Only (Khmer .srt Only)</option>
-                        </select>
                     </div>
                 </div>
 
@@ -398,7 +393,6 @@
                 if (data.success) {
                     document.getElementById('fetchedVideoTitle').innerText = `📹 ${data.title}`;
                     
-                    // Populate dynamically detected qualities
                     const qualitySelect = document.getElementById('urlQualitySelect');
                     if (data.qualities && data.qualities.length > 0) {
                         let qHtml = '';
@@ -408,7 +402,6 @@
                         qualitySelect.innerHTML = qHtml;
                     }
 
-                    // Populate subtitles
                     const selectEl = document.getElementById('urlSubLangSelect');
                     let html = `<option value="">-- No Subtitles (Video Only) --</option>`;
                     data.languages.forEach(lang => {

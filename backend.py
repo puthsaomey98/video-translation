@@ -29,6 +29,7 @@ try:
         os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
 except Exception:
     FFMPEG_PATH = "ffmpeg"
+    ffmpeg_dir = None
 
 from core.separator import extract_and_separate_audio
 from core.stt import transcribe_isolated_vocals
@@ -67,6 +68,13 @@ def preprocess_source_text(text: str, source_lang: str) -> str:
             text = text.replace(typo, fix)
     return text.strip()
 
+def sanitize_filename(filename: str) -> str:
+    # Replace URL-breaking characters (#, ?, &, %, quotes, slashes) with clean underscores
+    clean_name = re.sub(r'[#\?&%\"\'\/\\]', '_', filename)
+    clean_name = re.sub(r'\s+', '_', clean_name)
+    clean_name = re.sub(r'_+', '_', clean_name)
+    return clean_name.strip('_.')
+
 def save_task_to_disk(task_id: str):
     if task_id in task_data:
         history_path = os.path.join("history", f"{task_id}.json")
@@ -94,7 +102,6 @@ def clean_media_url(url: str) -> str:
         return ""
     url = url.strip()
 
-    # YouTube Shorts & Watch URLs
     shorts_match = re.search(r'(?:youtube\.com/shorts/|youtu\.be/)([\w-]+)', url)
     if shorts_match:
         return f"https://www.youtube.com/watch?v={shorts_match.group(1)}"
@@ -107,7 +114,6 @@ def clean_media_url(url: str) -> str:
             return base_url + "?" + clean_params[0]
         return base_url
 
-    # Retain full URL queries for CDN streams (e.g. 71edge.com, .f4v, .m3u8) as tokens are in parameters
     return url
 
 def get_video_dimensions_and_codec(video_path: str) -> dict:
@@ -138,17 +144,7 @@ def get_common_ydl_opts(download_id: Optional[str] = None) -> dict:
     opts = {
         'quiet': True,
         'no_warnings': True,
-        'ffmpeg_location': FFMPEG_PATH,
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Sec-Fetch-Mode': 'navigate',
-        },
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['web', 'mweb', 'ios', 'android'],
-            }
-        },
+        'ffmpeg_location': ffmpeg_dir if ffmpeg_dir else FFMPEG_PATH,
     }
 
     cookie_paths = [
@@ -170,28 +166,39 @@ def safe_extract_info(url: str, is_download: bool = False, custom_opts: dict = N
         base_opts.update(custom_opts)
 
     if not is_download:
-        base_opts['format'] = 'bv*+ba/b'
+        base_opts.pop('format', None)
         base_opts['ignore_no_formats_error'] = True
 
-    try:
-        with yt_dlp.YoutubeDL(base_opts) as ydl:
-            info = ydl.extract_info(url, download=is_download)
-            if info is not None:
-                return info, ydl
-    except Exception as e:
-        fallback_opts = dict(base_opts)
-        fallback_opts['extractor_args'] = {
-            'youtube': {
-                'player_client': ['ios', 'android', 'mweb'],
-            }
-        }
+    is_youtube = "youtube.com" in url or "youtu.be" in url
+
+    if is_youtube:
+        strategies = [
+            {'extractor_args': {'youtube': {'player_client': ['android']}}},
+            {'extractor_args': {'youtube': {'player_client': ['web_creator', 'android']}}},
+            {'extractor_args': {'youtube': {'player_client': ['mweb', 'android']}}},
+            {'extractor_args': {'youtube': {'player_client': ['tv', 'android_vr']}}},
+            {}
+        ]
+    else:
+        strategies = [{}]
+
+    last_err = None
+    for strat in strategies:
         try:
-            with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
-                info = ydl_fb.extract_info(url, download=is_download)
+            run_opts = dict(base_opts)
+            run_opts.update(strat)
+            run_opts.pop('ignoreerrors', None)
+
+            with yt_dlp.YoutubeDL(run_opts) as ydl:
+                info = ydl.extract_info(url, download=is_download)
                 if info is not None:
-                    return info, ydl_fb
-        except Exception as fb_err:
-            raise RuntimeError(f"Error fetching stream info: {e} (Fallback: {fb_err})")
+                    return info, ydl
+        except Exception as e:
+            last_err = e
+            continue
+
+    clean_err = re.sub(r'\x1b\[[0-9;]*m', '', str(last_err)) if last_err else 'Stream unavailable'
+    raise RuntimeError(f"Error fetching stream info: {clean_err}")
 
 def get_video_duration(video_path: str) -> float:
     if not video_path or video_path.lower().endswith(('.srt', '.vtt', '.txt', '.json')):
@@ -397,15 +404,7 @@ def apply_clip_duration(clip, duration):
         return clip.with_duration(duration)
     return clip.set_duration(duration)
 
-def apply_clip_audio(video_clip, audio_clip):
-    if hasattr(video_clip, "with_audio"):
-        return video_clip.with_audio(audio_clip)
-    return video_clip.set_audio(audio_clip)
-
-def merge_with_realtime_progress(task_id: str, video_path: str, background_audio_path: str, audio_segments: list, output_path: str, bg_volume: float = 0.4, voice_volume: float = 1.5):
-    if not audio_segments:
-        raise RuntimeError("❌ No voiceover segments available to merge.")
-
+def merge_with_realtime_progress(task_id: str, video_path: str, background_audio_path: str, audio_segments: list, output_path: str, bg_volume: float = 0.4, voice_volume: float = 1.5, audio_mode: str = "both"):
     fitted_temp_files = []
     temp_mixed_audio = f"temp_mixed_audio_{task_id}.wav"
     
@@ -419,28 +418,38 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
                 total_duration = v_test.duration
 
         audio_clips = []
-        if background_audio_path and os.path.exists(background_audio_path):
+
+        # 1. Background Music Track Processing
+        include_bg = (audio_mode in ["both", "bg_and_voice", "bg_only"]) and (bg_volume > 0.0)
+        if include_bg and background_audio_path and os.path.exists(background_audio_path):
             bg_clip = AudioFileClip(background_audio_path)
             bg_clip = apply_clip_volume(bg_clip, bg_volume)
+            bg_clip = apply_clip_duration(bg_clip, total_duration)
             audio_clips.append(bg_clip)
 
-        for i, seg in enumerate(audio_segments):
-            target_duration = seg["end"] - seg["start"]
-            fitted_path = f"temp_rerender_fitted_{task_id}_{i}.mp3"
-            processed_path = fit_and_normalize_audio_segment(seg["path"], target_duration, fitted_path)
-            
-            if processed_path == fitted_path:
-                fitted_temp_files.append(fitted_path)
+        # 2. Voiceover Track Processing
+        include_voice = (audio_mode in ["both", "bg_and_voice", "voice_only"]) and (voice_volume > 0.0)
+        if include_voice and audio_segments:
+            for i, seg in enumerate(audio_segments):
+                target_duration = seg["end"] - seg["start"]
+                fitted_path = f"temp_rerender_fitted_{task_id}_{i}.mp3"
+                processed_path = fit_and_normalize_audio_segment(seg["path"], target_duration, fitted_path)
+                
+                if processed_path == fitted_path:
+                    fitted_temp_files.append(fitted_path)
 
-            if os.path.exists(processed_path):
-                v_clip = AudioFileClip(processed_path)
-                v_clip = apply_clip_start(v_clip, seg["start"])
-                v_clip = apply_clip_volume(v_clip, voice_volume)
-                audio_clips.append(v_clip)
+                if os.path.exists(processed_path):
+                    v_clip = AudioFileClip(processed_path)
+                    v_clip = apply_clip_start(v_clip, seg["start"])
+                    v_clip = apply_clip_volume(v_clip, voice_volume)
+                    audio_clips.append(v_clip)
+
+        if not audio_clips:
+            raise RuntimeError("❌ No audio tracks selected for mixing.")
 
         final_audio = apply_clip_duration(CompositeAudioClip(audio_clips), total_duration)
 
-        task_data[task_id]["status"] = {"status": "processing", "step": "Exporting master voiceover track...", "progress": 88}
+        task_data[task_id]["status"] = {"status": "processing", "step": "Exporting master audio track...", "progress": 88}
         save_task_to_disk(task_id)
 
         final_audio.write_audiofile(
@@ -455,17 +464,26 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
         for clip in audio_clips:
             clip.close()
 
-        task_data[task_id]["status"] = {"status": "processing", "step": "Muxing audio with 100% original video (Lossless)...", "progress": 94}
+        task_data[task_id]["status"] = {"status": "processing", "step": "Encoding web-compatible video (H.264 / Fast-Start)...", "progress": 94}
         save_task_to_disk(task_id)
 
-        # ⚡ 100% Lossless Direct Stream Copy
+        # Check existing video codec
+        v_meta = get_video_dimensions_and_codec(video_path)
+        src_codec = v_meta.get("codec", "unknown")
+
+        # Use -c:v copy if source is already standard h264; otherwise transcode to libx264 for 100% browser compatibility
+        if src_codec in ["h264", "avc1"]:
+            v_codec_args = ["-c:v", "copy"]
+        else:
+            v_codec_args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
+
         cmd = [
             FFMPEG_PATH, "-y",
             "-i", video_path,
             "-i", temp_mixed_audio,
-            "-c:v", "copy",
+            *v_codec_args,
             "-c:a", "aac",
-            "-b:a", "320k",
+            "-b:a", "192k",
             "-map", "0:v:0",
             "-map", "1:a:0",
             "-shortest",
@@ -475,26 +493,26 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if result.returncode != 0 or not os.path.exists(output_path):
-            hq_cmd = [
+            # Fallback universal transcoding
+            fb_cmd = [
                 FFMPEG_PATH, "-y",
                 "-i", video_path,
                 "-i", temp_mixed_audio,
                 "-c:v", "libx264",
-                "-crf", "14",
-                "-preset", "medium",
-                "-profile:v", "high",
+                "-preset", "veryfast",
+                "-crf", "20",
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
-                "-b:a", "320k",
+                "-b:a", "192k",
                 "-map", "0:v:0",
                 "-map", "1:a:0",
                 "-shortest",
                 "-movflags", "+faststart",
                 output_path
             ]
-            hq_res = subprocess.run(hq_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if hq_res.returncode != 0:
-                raise RuntimeError(f"FFmpeg muxing failed: {hq_res.stderr}")
+            fb_res = subprocess.run(fb_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if fb_res.returncode != 0:
+                raise RuntimeError(f"FFmpeg muxing failed: {fb_res.stderr}")
 
     except Exception as e:
         raise RuntimeError(f"❌ Audio mixing failed: {str(e)}")
@@ -510,10 +528,6 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
                     os.remove(tmp_f)
                 except Exception:
                     pass
-
-def sanitize_filename(filename: str) -> str:
-    clean_name = re.sub(r'[^\w\.-]', '_', filename)
-    return re.sub(r'_+', '_', clean_name).strip('_')
 
 def parse_srt(srt_path: str) -> list:
     segments = []
@@ -628,7 +642,36 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
         task_data[task_id]["video_path"] = video_path
         task_data[task_id]["background_audio_path"] = background_music_path
         task_data[task_id]["output_path"] = output_path
-        
+        task_data[task_id]["audio_mode"] = output_mode
+
+        # Fast-track for Sound Only Background Mode
+        if output_mode == "bg_only":
+            task_data[task_id]["status"] = {"status": "processing", "step": "Exporting Sound Only Background video...", "progress": 75}
+            save_task_to_disk(task_id)
+
+            merge_with_realtime_progress(
+                task_id=task_id,
+                video_path=video_path,
+                background_audio_path=background_music_path,
+                audio_segments=[],
+                output_path=output_path,
+                bg_volume=0.7,
+                voice_volume=0.0,
+                audio_mode="bg_only"
+            )
+
+            task_data[task_id]["status"] = {
+                "status": "completed", 
+                "step": "Background Track Export Complete!", 
+                "progress": 100,
+                "output_video": f"/output/{os.path.basename(output_path)}",
+                "output_srt": ""
+            }
+            task_data[task_id]["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            save_task_to_disk(task_id)
+            return
+
+        # Voiceover & Subtitle Pipeline
         raw_segments = []
         if subtitle_filename:
             srt_full_path = os.path.join("input", subtitle_filename)
@@ -692,6 +735,19 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
         with open(khmer_srt_path, "w", encoding="utf-8") as f:
             f.write("\n".join(srt_lines))
 
+        # Subtitle Only Mode
+        if output_mode == "subtitle":
+            task_data[task_id]["status"] = {
+                "status": "completed", 
+                "step": "Subtitles Generated Successfully!", 
+                "progress": 100,
+                "output_video": f"/input/{os.path.basename(video_path)}",
+                "output_srt": f"/output/{os.path.basename(khmer_srt_path)}"
+            }
+            task_data[task_id]["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            save_task_to_disk(task_id)
+            return
+
         audio_segments = []
         for idx, seg in enumerate(translated_segments):
             if seg["translated_text"].strip():
@@ -719,7 +775,7 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
             }
             save_task_to_disk(task_id)
 
-        bg_vol = task_data[task_id].get("bg_volume", 0.4)
+        bg_vol = 0.0 if output_mode == "voice_only" else task_data[task_id].get("bg_volume", 0.4)
         voice_vol = task_data[task_id].get("voice_volume", 1.5)
 
         merge_with_realtime_progress(
@@ -729,7 +785,8 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
             audio_segments=audio_segments,
             output_path=output_path,
             bg_volume=bg_vol,
-            voice_volume=voice_vol
+            voice_volume=voice_vol,
+            audio_mode=output_mode
         )
 
         for seg in audio_segments:
@@ -809,7 +866,8 @@ async def trim_clip(req: TrimClipRequest):
     
     clip_id = str(os.urandom(4).hex())
     base_name, ext = os.path.splitext(req.filename)
-    clip_filename = f"clip_{clip_id}_{base_name}{ext}"
+    clean_base = sanitize_filename(base_name)
+    clip_filename = f"clip_{clip_id}_{clean_base}{ext}"
     clip_path = os.path.join("input", clip_filename)
     
     duration = req.end - req.start
@@ -818,7 +876,7 @@ async def trim_clip(req: TrimClipRequest):
     
     cmd = [
         FFMPEG_PATH, "-y", "-ss", str(req.start), "-i", src_path,
-        "-t", str(duration), "-c:v", "copy", "-c:a", "copy", clip_path
+        "-t", str(duration), "-c:v", "copy", "-c:a", "copy", "-movflags", "+faststart", clip_path
     ]
     res = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -828,7 +886,6 @@ async def trim_clip(req: TrimClipRequest):
         raise HTTPException(status_code=500, detail="FFmpeg failed to trim video clip.")
 
     source_srt = None
-    clean_base = base_name.split('.')[0]
     for f in os.listdir("input"):
         if f.lower().endswith(('.srt', '.vtt')) and clean_base in f:
             source_srt = os.path.join("input", f)
@@ -865,8 +922,8 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
         raise HTTPException(status_code=404, detail=f"Video file not found in input folder: {filename}")
     
     task_id = str(os.urandom(4).hex())
-
-    safe_name = sanitize_filename(filename)
+    base_name, _ = os.path.splitext(filename)
+    safe_name = sanitize_filename(base_name) + ".mp4"
     output_path = os.path.join("output", f"dubbed_{task_id}_{safe_name}")
 
     if pasted_script and pasted_script.strip():
@@ -879,8 +936,9 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
         "task_id": task_id,
         "filename": filename,
         "status": {"status": "queued", "step": "In queue...", "progress": 0},
-        "bg_volume": 0.4,
-        "voice_volume": 1.5,
+        "bg_volume": 0.4 if output_mode != "voice_only" else 0.0,
+        "voice_volume": 1.5 if output_mode != "bg_only" else 0.0,
+        "audio_mode": output_mode,
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
     }
     save_task_to_disk(task_id)
@@ -895,7 +953,8 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
 @app.post("/api/upload-preview")
 async def upload_preview(file: UploadFile = File(...)):
     temp_id = str(os.urandom(4).hex())
-    filename = f"{temp_id}_{file.filename}"
+    clean_upload_name = sanitize_filename(file.filename)
+    filename = f"{temp_id}_{clean_upload_name}"
     input_path = os.path.join("input", filename)
     
     with open(input_path, "wb") as buffer:
@@ -941,7 +1000,6 @@ async def fetch_url_info(req: URLInfoRequest):
     try:
         cleaned_url = clean_media_url(req.url)
         
-        # Direct stream links (CDN, .m3u8, .f4v)
         if any(ext in cleaned_url.lower() for ext in [".f4v", ".m3u8", ".mpd", "71edge.com", "googlevideo.com"]):
             return {
                 "success": True,
@@ -975,7 +1033,7 @@ async def fetch_url_info(req: URLInfoRequest):
                     if min_dim >= 144:
                         available_res_set.add(min_dim)
 
-        quality_options = [{"id": "best", "label": "🌟 Best Source Quality (Auto Max)"}]
+        quality_options = [{"id": "best", "label": "🌟 Best Source Quality (Auto Max 1080p/4K)"}]
         
         known_labels = {
             2160: "4K (2160x3840 / 3840x2160)",
@@ -1022,19 +1080,17 @@ async def background_download_video(download_id: str, url: str, sublang: Optiona
         cleaned_url = clean_media_url(url)
         temp_id = download_id
 
-        # ⚡ Direct CDN / .f4v / .m3u8 Stream Downloader with Full Browser Headers
+        # Direct CDN / .f4v / .m3u8 Stream Downloader
         if any(ext in cleaned_url.lower() for ext in [".f4v", ".m3u8", ".mpd", "71edge.com", "googlevideo.com"]):
             output_filename = f"{temp_id}_stream_video.mp4"
             output_path = os.path.join("input", output_filename)
             temp_raw_file = os.path.join("input", f"{temp_id}_raw.f4v")
 
-            # Determine Referer based on domain
             referer = "https://www.iqiyi.com/" if "71edge.com" in cleaned_url or "iqiyi" in cleaned_url else "https://www.youtube.com/"
             user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
             header_str = f"Referer: {referer}\r\nUser-Agent: {user_agent}\r\n"
 
-            # Attempt 1: FFmpeg with injected headers
             cmd = [
                 FFMPEG_PATH, "-y",
                 "-headers", header_str,
@@ -1045,7 +1101,6 @@ async def background_download_video(download_id: str, url: str, sublang: Optiona
             ]
             res = await asyncio.to_thread(subprocess.run, cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-            # Attempt 2: Fallback to Python streaming download if FFmpeg fails
             if res.returncode != 0 or not os.path.exists(output_path):
                 print(f"⚠️ Notice: FFmpeg direct stream error: {res.stderr[:160]}... Trying chunked Python fetcher...")
                 download_tasks[download_id]["step"] = "Streaming chunked segments via Python buffer..."
@@ -1069,7 +1124,6 @@ async def background_download_video(download_id: str, url: str, sublang: Optiona
 
                 await asyncio.to_thread(run_stream_download)
 
-                # Lossless conversion from raw container to standard mp4
                 if os.path.exists(temp_raw_file) and os.path.getsize(temp_raw_file) > 1000:
                     conv_cmd = [
                         FFMPEG_PATH, "-y",
@@ -1098,15 +1152,15 @@ async def background_download_video(download_id: str, url: str, sublang: Optiona
             }
             return
 
-        # Standard yt-dlp workflow
+        # High-Resolution (1080p/4K) Downloader
         output_template = os.path.join("input", f"{temp_id}_%(title).100B.%(ext)s")
-        languages_to_fetch = [sublang] if sublang and sublang.strip() else ['en', 'en-US', 'zh', 'ja', 'ko']
+        languages_to_fetch = [sublang] if sublang and sublang.strip() else ['en', 'en-US', 'zh', 'ja', 'ko', 'all']
         
         if quality and quality != "best" and quality.isdigit():
             target_res = int(quality)
             format_sort_rules = [f'res:{target_res}', 'fps', 'codec:vp9:av01:h264', 'size', 'br']
         else:
-            format_sort_rules = ['res:1080', 'res', 'fps', 'codec:vp9:av01:h264', 'size', 'br']
+            format_sort_rules = ['res', 'fps', 'codec:vp9:av01:h264', 'size', 'br']
 
         custom_opts = {
             'format': 'bv*+ba/b',
@@ -1118,7 +1172,6 @@ async def background_download_video(download_id: str, url: str, sublang: Optiona
             'writeautomaticsub': True,
             'subtitleslangs': languages_to_fetch,
             'subtitlesformat': 'srt/vtt/best',
-            'ignoreerrors': 'only_download',
             'extractor_retries': 3,
             'sleep_interval_subtitles': 2,
             'postprocessors': [{
@@ -1208,7 +1261,7 @@ async def get_history():
                             "filename": data.get("filename", "Unknown Video"),
                             "status": data.get("status", {}).get("status", "unknown"),
                             "updated_at": data.get("updated_at", "Recent"),
-                            "output_video": f"/output/dubbed_{data.get('task_id', '')}_{data.get('filename', '')}" if "dubbed_" not in data.get('output_path', '') else f"/output/{os.path.basename(data.get('output_path', ''))}"
+                            "output_video": f"/output/{os.path.basename(data.get('output_path', ''))}"
                         })
                 except Exception:
                     pass
@@ -1241,12 +1294,16 @@ async def get_editor_data(task_id: str):
     if not tdata:
         return {"error": "Task not found"}
     
+    out_path = tdata.get('output_path', '')
+    out_filename = os.path.basename(out_path) if out_path else ''
+
     return {
         "filename": tdata.get("filename", "Project Workspace"),
         "segments": tdata.get("segments", []),
         "bg_volume": tdata.get("bg_volume", 0.4),
         "voice_volume": tdata.get("voice_volume", 1.5),
-        "output_video": f"/output/{os.path.basename(tdata.get('output_path', ''))}",
+        "audio_mode": tdata.get("audio_mode", "both"),
+        "output_video": f"/output/{out_filename}",
         "background_audio": tdata.get("public_bg_audio")
     }
 
@@ -1256,11 +1313,6 @@ class SegmentItem(BaseModel):
     source_text: str = ""
     translated_text: str
     gender: str = "female"
-
-class ReRenderRequest(BaseModel):
-    segments: List[SegmentItem]
-    bg_volume: float = 0.4
-    voice_volume: float = 1.5
 
 @app.post("/api/test-segment/{task_id}/{index}")
 async def test_single_segment(task_id: str, index: int, req: SegmentItem):
@@ -1287,11 +1339,13 @@ async def re_render_task(task_id: str, payload: dict):
         return {"success": False, "error": "Task not found"}
     
     segments = payload.get("segments", [])
-    bg_volume = payload.get("bg_volume", 0.4)
-    voice_volume = payload.get("voice_volume", 1.5)
+    bg_volume = float(payload.get("bg_volume", 0.4))
+    voice_volume = float(payload.get("voice_volume", 1.5))
+    audio_mode = payload.get("audio_mode", "both")
     
     tdata["bg_volume"] = bg_volume
     tdata["voice_volume"] = voice_volume
+    tdata["audio_mode"] = audio_mode
     
     for seg in segments:
         if "translated_text" in seg:
@@ -1310,18 +1364,19 @@ async def re_render_task(task_id: str, payload: dict):
 
     try:
         audio_segments = []
-        for idx, seg in enumerate(segments):
-            text_to_speak = clean_khmer_text(seg.get("translated_text", ""))
-            gender = seg.get("gender", "female")
-            if text_to_speak:
-                seg_audio_path = f"temp_seg_{task_id}_{idx}.mp3"
-                success = await generate_segment_audio(text_to_speak, seg_audio_path, gender=gender)
-                if success and os.path.exists(seg_audio_path):
-                    audio_segments.append({
-                        "path": seg_audio_path,
-                        "start": seg["start"],
-                        "end": seg["end"]
-                    })
+        if audio_mode != "bg_only" and voice_volume > 0:
+            for idx, seg in enumerate(segments):
+                text_to_speak = clean_khmer_text(seg.get("translated_text", ""))
+                gender = seg.get("gender", "female")
+                if text_to_speak:
+                    seg_audio_path = f"temp_seg_{task_id}_{idx}.mp3"
+                    success = await generate_segment_audio(text_to_speak, seg_audio_path, gender=gender)
+                    if success and os.path.exists(seg_audio_path):
+                        audio_segments.append({
+                            "path": seg_audio_path,
+                            "start": seg["start"],
+                            "end": seg["end"]
+                        })
 
         merge_with_realtime_progress(
             task_id=task_id,
@@ -1330,7 +1385,8 @@ async def re_render_task(task_id: str, payload: dict):
             audio_segments=audio_segments,
             output_path=output_path,
             bg_volume=bg_volume,
-            voice_volume=voice_volume
+            voice_volume=voice_volume,
+            audio_mode=audio_mode
         )
 
         for seg in audio_segments:
@@ -1425,10 +1481,11 @@ async def auto_split_video(req: AutoSplitRequest):
     parts_created = 0
     start_time = 0.0
     base_name, ext = os.path.splitext(req.filename)
+    clean_base = sanitize_filename(base_name)
     
     matching_srt_path = None
     for f in os.listdir("input"):
-        if f.lower().endswith(('.srt', '.vtt')) and (base_name in f or f.startswith(base_name[:10])):
+        if f.lower().endswith(('.srt', '.vtt')) and (clean_base in f or clean_base[:10] in f):
             matching_srt_path = os.path.join("input", f)
             break
             
@@ -1477,12 +1534,12 @@ async def auto_split_video(req: AutoSplitRequest):
             actual_duration = end_time - start_time
             
             clip_id = str(os.urandom(3).hex())
-            clip_filename = f"part_{parts_created + 1}_{clip_id}_{base_name}{ext}"
+            clip_filename = f"part_{parts_created + 1}_{clip_id}_{clean_base}{ext}"
             clip_path = os.path.join("input", clip_filename)
             
             cmd = [
                 FFMPEG_PATH, "-y", "-ss", str(start_time), "-i", src_path,
-                "-t", str(actual_duration), "-c:v", "copy", "-c:a", "copy", clip_path
+                "-t", str(actual_duration), "-c:v", "copy", "-c:a", "copy", "-movflags", "+faststart", clip_path
             ]
             res = subprocess.run(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -1493,7 +1550,7 @@ async def auto_split_video(req: AutoSplitRequest):
                 parts_created += 1
                 
                 if srt_blocks:
-                    part_srt_filename = f"part_{parts_created}_{clip_id}_{base_name}.srt"
+                    part_srt_filename = f"part_{parts_created}_{clip_id}_{clean_base}.srt"
                     part_srt_path = os.path.join("input", part_srt_filename)
                     part_lines = []
                     counter = 1
