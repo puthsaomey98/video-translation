@@ -35,6 +35,12 @@
                 </select>
             </div>
 
+            <!-- Animated Watermark Toggle -->
+            <label class="flex items-center space-x-1.5 bg-slate-950 hover:bg-slate-900 px-2.5 py-1 rounded-lg border border-amber-500/40 cursor-pointer transition text-xs font-mono text-amber-300">
+                <input type="checkbox" id="watermarkToggle" class="accent-amber-500 rounded">
+                <span>✨ Watermark</span>
+            </label>
+
             <button onclick="autoTrimAllVoices()" class="bg-amber-600 hover:bg-amber-500 text-white text-xs px-3.5 py-1.5 rounded-lg transition shadow flex items-center space-x-1 font-mono">
                 <span>✂️ Auto-Trim Overlaps</span>
             </button>
@@ -180,7 +186,6 @@
                 
                 videoEl.pause();
                 
-                // Safely encode entire path URL to prevent 404s on hashtags (#) and special symbols
                 const safeVideoUrl = getSafeMediaUrl(data.output_video);
                 videoEl.src = safeVideoUrl;
                 videoEl.load();
@@ -254,6 +259,10 @@
                 if (data.audio_mode) {
                     const presetSelect = document.getElementById('audioModePreset');
                     if (presetSelect) presetSelect.value = data.audio_mode === 'bg_only' ? 'bg_only' : (data.audio_mode === 'voice_only' ? 'voice_only' : 'both');
+                }
+
+                if (data.add_watermark !== undefined) {
+                    document.getElementById('watermarkToggle').checked = Boolean(data.add_watermark);
                 }
 
             } catch (err) {
@@ -611,12 +620,14 @@
             syncInputsToData();
 
             const presetMode = document.getElementById('audioModePreset').value;
+            const addWatermark = document.getElementById('watermarkToggle').checked;
 
             const payload = {
                 segments: currentData.segments,
                 bg_volume: parseFloat(document.getElementById('bgVolume').value),
                 voice_volume: parseFloat(document.getElementById('voiceVolume').value),
-                audio_mode: presetMode
+                audio_mode: presetMode,
+                add_watermark: addWatermark
             };
 
             const statusCard = document.getElementById('statusCard');

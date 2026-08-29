@@ -60,6 +60,25 @@ ZH_TYPO_MAP = {
     "进房炮": "近防炮",
 }
 
+def get_logo_path() -> Optional[str]:
+    possible_names = [
+        "logo.png", "logo.jpg", "logo.jpeg", "logo.webp",
+        os.path.join("static", "logo.png"), os.path.join("static", "logo.jpg"),
+        os.path.join("input", "logo.png"), os.path.join("input", "logo.jpg")
+    ]
+    for name in possible_names:
+        if os.path.exists(name) and os.path.getsize(name) > 0:
+            return os.path.abspath(name)
+            
+    try:
+        for f in os.listdir("."):
+            if f.lower().startswith(("logo", "watermark")) and f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                return os.path.abspath(f)
+    except Exception:
+        pass
+        
+    return None
+
 def preprocess_source_text(text: str, source_lang: str) -> str:
     if not text:
         return ""
@@ -69,7 +88,6 @@ def preprocess_source_text(text: str, source_lang: str) -> str:
     return text.strip()
 
 def sanitize_filename(filename: str) -> str:
-    # Replace URL-breaking characters (#, ?, &, %, quotes, slashes) with clean underscores
     clean_name = re.sub(r'[#\?&%\"\'\/\\]', '_', filename)
     clean_name = re.sub(r'\s+', '_', clean_name)
     clean_name = re.sub(r'_+', '_', clean_name)
@@ -404,7 +422,7 @@ def apply_clip_duration(clip, duration):
         return clip.with_duration(duration)
     return clip.set_duration(duration)
 
-def merge_with_realtime_progress(task_id: str, video_path: str, background_audio_path: str, audio_segments: list, output_path: str, bg_volume: float = 0.4, voice_volume: float = 1.5, audio_mode: str = "both"):
+def merge_with_realtime_progress(task_id: str, video_path: str, background_audio_path: str, audio_segments: list, output_path: str, bg_volume: float = 0.4, voice_volume: float = 1.5, audio_mode: str = "both", add_watermark: bool = False):
     fitted_temp_files = []
     temp_mixed_audio = f"temp_mixed_audio_{task_id}.wav"
     
@@ -464,36 +482,75 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
         for clip in audio_clips:
             clip.close()
 
-        task_data[task_id]["status"] = {"status": "processing", "step": "Encoding web-compatible video (H.264 / Fast-Start)...", "progress": 94}
+        task_data[task_id]["status"] = {"status": "processing", "step": "Encoding video with Left-to-Right watermark & audio...", "progress": 94}
         save_task_to_disk(task_id)
 
-        # Check existing video codec
         v_meta = get_video_dimensions_and_codec(video_path)
-        src_codec = v_meta.get("codec", "unknown")
+        vid_w = v_meta.get("width", 0)
+        if vid_w <= 0:
+            vid_w = 1080
 
-        # Use -c:v copy if source is already standard h264; otherwise transcode to libx264 for 100% browser compatibility
-        if src_codec in ["h264", "avc1"]:
-            v_codec_args = ["-c:v", "copy"]
+        # Scale down to 22% of video width (even number) for a clean circular watermark
+        logo_w = int(vid_w * 0.22)
+        if logo_w % 2 != 0:
+            logo_w += 1
+        if logo_w < 80:
+            logo_w = 80
+
+        logo_path = get_logo_path()
+        print(f"🎨 [Watermark Render] Enabled: {add_watermark} | Detected Logo: {logo_path} | Size: {logo_w}x{logo_w}px (Circle, 10% Opacity, Left->Right, Every 20s)")
+
+        # 🌟 Animated Floating Circular Watermark (10% Opacity, Left-to-Right, 20s Delay Interval)
+        if add_watermark and logo_path and os.path.exists(logo_path):
+            filter_complex_str = (
+                f"[2:v]scale={logo_w}:{logo_w},format=rgba,"
+                f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-W/2,Y-H/2),W/2-1),255,0)',"
+                f"colorchannelmixer=aa=0.10[wm];"
+                f"[0:v][wm]overlay=x='-w+(mod(t\\,20)/7)*(W+w)':y='(H-h)/2':enable='lt(mod(t\\,20)\\,7)':eval=frame[v]"
+            )
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-i", video_path,
+                "-i", temp_mixed_audio,
+                "-loop", "1", "-i", logo_path,
+                "-filter_complex", filter_complex_str,
+                "-map", "[v]",
+                "-map", "1:a:0",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "18",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-shortest",
+                "-movflags", "+faststart",
+                output_path
+            ]
         else:
-            v_codec_args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
+            src_codec = v_meta.get("codec", "unknown")
+            if src_codec in ["h264", "avc1"]:
+                v_codec_args = ["-c:v", "copy"]
+            else:
+                v_codec_args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
 
-        cmd = [
-            FFMPEG_PATH, "-y",
-            "-i", video_path,
-            "-i", temp_mixed_audio,
-            *v_codec_args,
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-shortest",
-            "-movflags", "+faststart",
-            output_path
-        ]
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-i", video_path,
+                "-i", temp_mixed_audio,
+                *v_codec_args,
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-map", "0:v:0",
+                "-map", "1:a:0",
+                "-shortest",
+                "-movflags", "+faststart",
+                output_path
+            ]
+
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if result.returncode != 0 or not os.path.exists(output_path):
-            # Fallback universal transcoding
+            print(f"⚠️ Notice: FFmpeg primary encode failed: {result.stderr[:200]}")
             fb_cmd = [
                 FFMPEG_PATH, "-y",
                 "-i", video_path,
@@ -621,7 +678,7 @@ def split_srt_for_clip(source_srt, output_srt, start_time, end_time):
         for i, seg in enumerate(new_segments, 1):
             f.write(f"{i}\n{format_time(seg['start'])} --> {format_time(seg['end'])}\n{seg['text']}\n\n")
 
-def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output_path: str, filename: str, subtitle_filename: Optional[str] = None, output_mode: str = "both", voice_mode: str = "auto"):
+def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output_path: str, filename: str, subtitle_filename: Optional[str] = None, output_mode: str = "both", voice_mode: str = "auto", add_watermark: bool = False):
     try:
         translator = KhmerTranslator()
 
@@ -643,6 +700,7 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
         task_data[task_id]["background_audio_path"] = background_music_path
         task_data[task_id]["output_path"] = output_path
         task_data[task_id]["audio_mode"] = output_mode
+        task_data[task_id]["add_watermark"] = add_watermark
 
         # Fast-track for Sound Only Background Mode
         if output_mode == "bg_only":
@@ -657,7 +715,8 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
                 output_path=output_path,
                 bg_volume=0.7,
                 voice_volume=0.0,
-                audio_mode="bg_only"
+                audio_mode="bg_only",
+                add_watermark=add_watermark
             )
 
             task_data[task_id]["status"] = {
@@ -786,7 +845,8 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
             output_path=output_path,
             bg_volume=bg_vol,
             voice_volume=voice_vol,
-            audio_mode=output_mode
+            audio_mode=output_mode,
+            add_watermark=add_watermark
         )
 
         for seg in audio_segments:
@@ -911,6 +971,7 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
         output_mode = body.get("output_mode", "both")
         voice_mode = body.get("voice_mode", "auto")
         pasted_script = body.get("pasted_script")
+        add_watermark = bool(body.get("add_watermark", False))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}")
         
@@ -939,6 +1000,7 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
         "bg_volume": 0.4 if output_mode != "voice_only" else 0.0,
         "voice_volume": 1.5 if output_mode != "bg_only" else 0.0,
         "audio_mode": output_mode,
+        "add_watermark": add_watermark,
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
     }
     save_task_to_disk(task_id)
@@ -946,7 +1008,7 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
     background_tasks.add_task(
         run_dubbing_pipeline, 
         task_id, video_path, source_lang, output_path, filename, 
-        subtitle_filename, output_mode, voice_mode
+        subtitle_filename, output_mode, voice_mode, add_watermark
     )
     return {"task_id": task_id, "message": "Khmer video dubbing pipeline started."}
 
@@ -1303,6 +1365,7 @@ async def get_editor_data(task_id: str):
         "bg_volume": tdata.get("bg_volume", 0.4),
         "voice_volume": tdata.get("voice_volume", 1.5),
         "audio_mode": tdata.get("audio_mode", "both"),
+        "add_watermark": tdata.get("add_watermark", False),
         "output_video": f"/output/{out_filename}",
         "background_audio": tdata.get("public_bg_audio")
     }
@@ -1342,10 +1405,12 @@ async def re_render_task(task_id: str, payload: dict):
     bg_volume = float(payload.get("bg_volume", 0.4))
     voice_volume = float(payload.get("voice_volume", 1.5))
     audio_mode = payload.get("audio_mode", "both")
+    add_watermark = bool(payload.get("add_watermark", False))
     
     tdata["bg_volume"] = bg_volume
     tdata["voice_volume"] = voice_volume
     tdata["audio_mode"] = audio_mode
+    tdata["add_watermark"] = add_watermark
     
     for seg in segments:
         if "translated_text" in seg:
@@ -1386,7 +1451,8 @@ async def re_render_task(task_id: str, payload: dict):
             output_path=output_path,
             bg_volume=bg_volume,
             voice_volume=voice_volume,
-            audio_mode=audio_mode
+            audio_mode=audio_mode,
+            add_watermark=add_watermark
         )
 
         for seg in audio_segments:

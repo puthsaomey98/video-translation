@@ -223,6 +223,21 @@
                     </select>
                 </div>
 
+                <!-- Animated Watermark Logo Option -->
+                <div class="bg-slate-950 p-3.5 rounded-xl border border-amber-500/40 flex items-center justify-between">
+                    <div class="space-y-0.5">
+                        <div class="flex items-center space-x-1.5">
+                            <span class="text-sm">✨</span>
+                            <span class="text-xs font-bold text-amber-300 font-mono uppercase">Animated Logo Watermark</span>
+                        </div>
+                        <p class="text-[10px] text-slate-400">Overlays logo with 10% opacity, floating smoothly from left to right center.</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="addWatermarkCheckbox" class="sr-only peer" checked>
+                        <div class="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-600"></div>
+                    </label>
+                </div>
+
                 <div class="space-y-3 text-xs">
                     <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
                         <label class="block text-[10px] text-slate-400 font-mono uppercase">Source Language</label>
@@ -855,6 +870,7 @@
             const subtitleFilename = document.getElementById('subtitleSelect').value;
             const outputMode = document.getElementById('outputModeSelect').value;
             const pastedScript = document.getElementById('pastedScriptInput').value.trim();
+            const addWatermark = document.getElementById('addWatermarkCheckbox').checked;
 
             closeTranslateModal();
 
@@ -871,7 +887,8 @@
                         voice_mode: voiceMode,
                         subtitle_filename: subtitleFilename ? subtitleFilename : null,
                         output_mode: outputMode,
-                        pasted_script: pastedScript ? pastedScript : null
+                        pasted_script: pastedScript ? pastedScript : null,
+                        add_watermark: addWatermark
                     })
                 });
                 const data = await res.json();
