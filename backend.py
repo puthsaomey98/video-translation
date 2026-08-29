@@ -505,7 +505,7 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
             filter_complex_str = (
                 f"[2:v]scale={logo_w}:{logo_w},format=rgba,"
                 f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-W/2,Y-H/2),W/2-1),255,0)',"
-                f"colorchannelmixer=aa=0.10[wm];"
+                f"colorchannelmixer=aa=0.15[wm];"
                 f"[0:v][wm]overlay=x='-w+(mod(t\\,20)/7)*(W+w)':y='(H-h)/2':enable='lt(mod(t\\,20)\\,7)':eval=frame[v]"
             )
             cmd = [
