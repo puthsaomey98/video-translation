@@ -491,11 +491,7 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
             vid_w = 1080
 
         # Scale down to 22% of video width (even number) for a clean circular watermark
-        logo_w = int(vid_w * 0.22)
-        if logo_w % 2 != 0:
-            logo_w += 1
-        if logo_w < 80:
-            logo_w = 80
+        logo_w = 100
 
         logo_path = get_logo_path()
         print(f"🎨 [Watermark Render] Enabled: {add_watermark} | Detected Logo: {logo_path} | Size: {logo_w}x{logo_w}px (Circle, 10% Opacity, Left->Right, Every 20s)")
