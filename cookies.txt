@@ -24,4 +24,5 @@
 .youtube.com	TRUE	/	TRUE	1803652410	__Secure-ROLLOUT_TOKEN	CK_sntXfucK3yQEQ5b_2isnIlgMY7cOnjsnIlgM%3D
 .youtube.com	TRUE	/	TRUE	1851172619	__Secure-YT_TVFAS	t=496694&s=2
 .youtube.com	TRUE	/	TRUE	1803652619	DEVICE_INFO	ChxOelkzT1Rnek1qZzNNelEwTmpRME1UYzRNQT09EIuA0dQGGM/+0NQG
-.youtube.com	TRUE	/tv	TRUE	1820932619	__Secure-YT_DERP	CIag8POyBg%3D%3D
+.youtube.com	TRUE	/tv	TRUE	1820932619	__Secure-YT_DERP	CIag8POyBg%3D%3D 
+
