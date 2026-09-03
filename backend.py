@@ -191,9 +191,9 @@ def safe_extract_info(url: str, is_download: bool = False, custom_opts: dict = N
 
     if is_youtube:
         strategies = [
-            {'extractor_args': {'youtube': {'player_client': ['android']}}},
-            {'extractor_args': {'youtube': {'player_client': ['web_creator', 'android']}}},
-            {'extractor_args': {'youtube': {'player_client': ['mweb', 'android']}}},
+            {'extractor_args': {'youtube': {'player_client': ['ios', 'android']}}},
+            {'extractor_args': {'youtube': {'player_client': ['web', 'android']}}},
+            {'extractor_args': {'youtube': {'player_client': ['mweb', 'ios']}}},
             {'extractor_args': {'youtube': {'player_client': ['tv', 'android_vr']}}},
             {}
         ]
@@ -422,12 +422,29 @@ def apply_clip_duration(clip, duration):
         return clip.with_duration(duration)
     return clip.set_duration(duration)
 
-def merge_with_realtime_progress(task_id: str, video_path: str, background_audio_path: str, audio_segments: list, output_path: str, bg_volume: float = 0.4, voice_volume: float = 1.5, audio_mode: str = "both", add_watermark: bool = False):
+def normalize_and_compress_bg_music(input_bg_path: str, output_bg_path: str) -> str:
+    """Tames loud music peaks and explosive sound effects using a compressor & limiter."""
+    try:
+        filter_str = "acompressor=threshold=-20dB:ratio=4.5:attack=10:release=120,alimiter=limit=0.8"
+        cmd = [
+            FFMPEG_PATH, "-y", "-i", input_bg_path,
+            "-filter:a", filter_str,
+            output_bg_path
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode == 0 and os.path.exists(output_bg_path):
+            return output_bg_path
+    except Exception:
+        pass
+    return input_bg_path
+
+def merge_with_realtime_progress(task_id: str, video_path: str, background_audio_path: str, audio_segments: list, output_path: str, bg_volume: float = 0.18, voice_volume: float = 1.6, audio_mode: str = "both", add_watermark: bool = False):
     fitted_temp_files = []
     temp_mixed_audio = f"temp_mixed_audio_{task_id}.wav"
+    compressed_bg_path = f"temp_comp_bg_{task_id}.wav"
     
     try:
-        task_data[task_id]["status"] = {"status": "processing", "step": "Mixing clean audio tracks and BGM...", "progress": 82}
+        task_data[task_id]["status"] = {"status": "processing", "step": "Mixing clean audio tracks and soft BGM...", "progress": 82}
         save_task_to_disk(task_id)
 
         total_duration = get_video_duration(video_path)
@@ -437,10 +454,19 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
 
         audio_clips = []
 
-        # 1. Background Music Track Processing
+        # 1. Background Music Track Processing (Compressed & Attenuated)
         include_bg = (audio_mode in ["both", "bg_and_voice", "bg_only"]) and (bg_volume > 0.0)
         if include_bg and background_audio_path and os.path.exists(background_audio_path):
-            bg_clip = AudioFileClip(background_audio_path)
+            active_bg_path = background_audio_path
+            
+            # Apply dynamic compression if mixing with voiceover to prevent loud SFX spikes
+            if audio_mode != "bg_only":
+                processed_bg = normalize_and_compress_bg_music(background_audio_path, compressed_bg_path)
+                if processed_bg == compressed_bg_path:
+                    fitted_temp_files.append(compressed_bg_path)
+                    active_bg_path = compressed_bg_path
+
+            bg_clip = AudioFileClip(active_bg_path)
             bg_clip = apply_clip_volume(bg_clip, bg_volume)
             bg_clip = apply_clip_duration(bg_clip, total_duration)
             audio_clips.append(bg_clip)
@@ -482,21 +508,18 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
         for clip in audio_clips:
             clip.close()
 
-        task_data[task_id]["status"] = {"status": "processing", "step": "Encoding video with Left-to-Right watermark & audio...", "progress": 94}
+        task_data[task_id]["status"] = {"status": "processing", "step": "Encoding video with watermark & audio...", "progress": 94}
         save_task_to_disk(task_id)
 
         v_meta = get_video_dimensions_and_codec(video_path)
-        vid_w = v_meta.get("width", 0)
-        if vid_w <= 0:
-            vid_w = 1080
-
-        # Scale down to 22% of video width (even number) for a clean circular watermark
-        logo_w = 100
+        
+        # Fixed 80px watermark size for clean vertical reels
+        logo_w = 80
 
         logo_path = get_logo_path()
         print(f"🎨 [Watermark Render] Enabled: {add_watermark} | Detected Logo: {logo_path} | Size: {logo_w}x{logo_w}px (Circle, 10% Opacity, Left->Right, Every 20s)")
 
-        # 🌟 Animated Floating Circular Watermark (10% Opacity, Left-to-Right, 20s Delay Interval)
+        # 🌟 Animated Floating Circular Watermark
         if add_watermark and logo_path and os.path.exists(logo_path):
             filter_complex_str = (
                 f"[2:v]scale={logo_w}:{logo_w},format=rgba,"
@@ -830,8 +853,9 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
             }
             save_task_to_disk(task_id)
 
-        bg_vol = 0.0 if output_mode == "voice_only" else task_data[task_id].get("bg_volume", 0.4)
-        voice_vol = task_data[task_id].get("voice_volume", 1.5)
+        # Subtle background volume (0.18) & clear voiceover (1.6)
+        bg_vol = 0.0 if output_mode == "voice_only" else task_data[task_id].get("bg_volume", 0.18)
+        voice_vol = task_data[task_id].get("voice_volume", 1.6)
 
         merge_with_realtime_progress(
             task_id=task_id,
@@ -993,8 +1017,8 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
         "task_id": task_id,
         "filename": filename,
         "status": {"status": "queued", "step": "In queue...", "progress": 0},
-        "bg_volume": 0.4 if output_mode != "voice_only" else 0.0,
-        "voice_volume": 1.5 if output_mode != "bg_only" else 0.0,
+        "bg_volume": 0.18 if output_mode != "voice_only" else 0.0,
+        "voice_volume": 1.6 if output_mode != "bg_only" else 0.0,
         "audio_mode": output_mode,
         "add_watermark": add_watermark,
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1358,8 +1382,8 @@ async def get_editor_data(task_id: str):
     return {
         "filename": tdata.get("filename", "Project Workspace"),
         "segments": tdata.get("segments", []),
-        "bg_volume": tdata.get("bg_volume", 0.4),
-        "voice_volume": tdata.get("voice_volume", 1.5),
+        "bg_volume": tdata.get("bg_volume", 0.18),
+        "voice_volume": tdata.get("voice_volume", 1.6),
         "audio_mode": tdata.get("audio_mode", "both"),
         "add_watermark": tdata.get("add_watermark", False),
         "output_video": f"/output/{out_filename}",
@@ -1398,8 +1422,8 @@ async def re_render_task(task_id: str, payload: dict):
         return {"success": False, "error": "Task not found"}
     
     segments = payload.get("segments", [])
-    bg_volume = float(payload.get("bg_volume", 0.4))
-    voice_volume = float(payload.get("voice_volume", 1.5))
+    bg_volume = float(payload.get("bg_volume", 0.18))
+    voice_volume = float(payload.get("voice_volume", 1.6))
     audio_mode = payload.get("audio_mode", "both")
     add_watermark = bool(payload.get("add_watermark", False))
     
