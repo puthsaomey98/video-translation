@@ -5,6 +5,7 @@ import subprocess
 import re
 import json
 import time
+import random
 import platform
 import urllib.request
 import numpy as np
@@ -47,6 +48,7 @@ os.makedirs("input", exist_ok=True)
 os.makedirs("output", exist_ok=True)
 os.makedirs("temp_separated", exist_ok=True)
 os.makedirs("history", exist_ok=True)
+os.makedirs("safe_bgm", exist_ok=True)  # Royalty-free BGM folder to bypass copyright strikes
 
 app.mount("/output", StaticFiles(directory="output"), name="output")
 app.mount("/input", StaticFiles(directory="input"), name="input")
@@ -77,6 +79,16 @@ def get_logo_path() -> Optional[str]:
     except Exception:
         pass
         
+    return None
+
+def get_safe_bgm_track() -> Optional[str]:
+    """Retrieves a random royalty-free audio file from the safe_bgm folder if present."""
+    safe_dir = "safe_bgm"
+    if os.path.exists(safe_dir):
+        valid_exts = (".mp3", ".wav", ".aac", ".m4a", ".ogg")
+        tracks = [os.path.join(safe_dir, f) for f in os.listdir(safe_dir) if f.lower().endswith(valid_exts)]
+        if tracks:
+            return os.path.abspath(random.choice(tracks))
     return None
 
 def preprocess_source_text(text: str, source_lang: str) -> str:
@@ -423,9 +435,14 @@ def apply_clip_duration(clip, duration):
     return clip.set_duration(duration)
 
 def normalize_and_compress_bg_music(input_bg_path: str, output_bg_path: str) -> str:
-    """Tames loud music peaks and explosive sound effects using a compressor & limiter."""
+    """Tames loud peaks and modifies the acoustic profile to evade Meta's automated music fingerprinting."""
     try:
-        filter_str = "acompressor=threshold=-20dB:ratio=4.5:attack=10:release=120,alimiter=limit=0.8"
+        filter_str = (
+            "highpass=f=60,lowpass=f=15000,"
+            "equalizer=f=1000:width_type=h:width=250:g=-3,"
+            "acompressor=threshold=-22dB:ratio=4.5:attack=10:release=120,"
+            "alimiter=limit=0.75"
+        )
         cmd = [
             FFMPEG_PATH, "-y", "-i", input_bg_path,
             "-filter:a", filter_str,
@@ -508,24 +525,25 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
         for clip in audio_clips:
             clip.close()
 
-        task_data[task_id]["status"] = {"status": "processing", "step": "Encoding video with watermark & audio...", "progress": 94}
+        task_data[task_id]["status"] = {"status": "processing", "step": "Applying transform filters to prevent unoriginal detection...", "progress": 94}
         save_task_to_disk(task_id)
 
-        v_meta = get_video_dimensions_and_codec(video_path)
-        
-        # Fixed 80px watermark size for clean vertical reels
         logo_w = 80
-
         logo_path = get_logo_path()
-        print(f"🎨 [Watermark Render] Enabled: {add_watermark} | Detected Logo: {logo_path} | Size: {logo_w}x{logo_w}px (Circle, 10% Opacity, Left->Right, Every 20s)")
+        print(f"🎨 [Watermark Render] Enabled: {add_watermark} | Detected Logo: {logo_path} | Size: {logo_w}x{logo_w}px")
 
-        # 🌟 Animated Floating Circular Watermark
+        base_visual_transform = (
+            "crop=trunc(in_w*0.96/2)*2:trunc(in_h*0.96/2)*2,scale=trunc(in_w/2)*2:trunc(in_h/2)*2,"
+            "eq=contrast=1.05:brightness=0.01:saturation=1.08,setpts=PTS/1.02"
+        )
+
         if add_watermark and logo_path and os.path.exists(logo_path):
             filter_complex_str = (
+                f"[0:v]{base_visual_transform}[vtransformed];"
                 f"[2:v]scale={logo_w}:{logo_w},format=rgba,"
                 f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-W/2,Y-H/2),W/2-1),255,0)',"
                 f"colorchannelmixer=aa=0.15[wm];"
-                f"[0:v][wm]overlay=x='-w+(mod(t\\,20)/7)*(W+w)':y='(H-h)/2':enable='lt(mod(t\\,20)\\,7)':eval=frame[v]"
+                f"[vtransformed][wm]overlay=x='-w+(mod(t\\,20)/7)*(W+w)':y='(H-h)/2':enable='lt(mod(t\\,20)\\,7)':eval=frame[v]"
             )
             cmd = [
                 FFMPEG_PATH, "-y",
@@ -541,26 +559,26 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
                 "-b:a", "192k",
+                "-filter:a", "atempo=1.02",
+                "-map_metadata", "-1",
                 "-shortest",
                 "-movflags", "+faststart",
                 output_path
             ]
         else:
-            src_codec = v_meta.get("codec", "unknown")
-            if src_codec in ["h264", "avc1"]:
-                v_codec_args = ["-c:v", "copy"]
-            else:
-                v_codec_args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
-
             cmd = [
                 FFMPEG_PATH, "-y",
                 "-i", video_path,
                 "-i", temp_mixed_audio,
-                *v_codec_args,
+                "-vf", base_visual_transform,
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "18",
+                "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
                 "-b:a", "192k",
-                "-map", "0:v:0",
-                "-map", "1:a:0",
+                "-filter:a", "atempo=1.02",
+                "-map_metadata", "-1",
                 "-shortest",
                 "-movflags", "+faststart",
                 output_path
@@ -574,14 +592,15 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
                 FFMPEG_PATH, "-y",
                 "-i", video_path,
                 "-i", temp_mixed_audio,
+                "-vf", base_visual_transform,
                 "-c:v", "libx264",
                 "-preset", "veryfast",
                 "-crf", "20",
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
                 "-b:a", "192k",
-                "-map", "0:v:0",
-                "-map", "1:a:0",
+                "-filter:a", "atempo=1.02",
+                "-map_metadata", "-1",
                 "-shortest",
                 "-movflags", "+faststart",
                 output_path
@@ -701,12 +720,18 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
     try:
         translator = KhmerTranslator()
 
-        task_data[task_id]["status"] = {"status": "processing", "step": "Isolating background music and audio tracks...", "progress": 15}
+        task_data[task_id]["status"] = {"status": "processing", "step": "Isolating audio & checking safe music...", "progress": 15}
         save_task_to_disk(task_id)
 
         stems = extract_and_separate_audio(video_path, output_dir="./temp_separated")
         vocals_path = stems["vocals"]
-        background_music_path = stems["no_vocals"]
+        
+        safe_music_choice = get_safe_bgm_track()
+        if safe_music_choice:
+            print(f"🎵 [Safe BGM Engine] Replaced copyrighted drama music with: {os.path.basename(safe_music_choice)}")
+            background_music_path = safe_music_choice
+        else:
+            background_music_path = stems["no_vocals"]
         
         public_bg_audio_name = f"bg_track_{task_id}.wav"
         public_bg_audio_path = os.path.join("output", public_bg_audio_name)
@@ -853,7 +878,6 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
             }
             save_task_to_disk(task_id)
 
-        # Subtle background volume (0.18) & clear voiceover (1.6)
         bg_vol = 0.0 if output_mode == "voice_only" else task_data[task_id].get("bg_volume", 0.18)
         voice_vol = task_data[task_id].get("voice_volume", 1.6)
 
@@ -889,6 +913,119 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
     except Exception as e:
         task_data[task_id]["status"] = {"status": "failed", "step": str(e), "progress": 0}
         save_task_to_disk(task_id)
+
+# ==========================================
+# 🌟 NEW: MERGE MULTIPLE TRANSLATED VIDEOS
+# ==========================================
+class MergeVideosRequest(BaseModel):
+    task_ids: List[str]
+    custom_title: Optional[str] = "full_merged_movie"
+
+@app.post("/api/merge-videos")
+async def merge_completed_videos(req: MergeVideosRequest):
+    if not req.task_ids or len(req.task_ids) < 2:
+        raise HTTPException(status_code=400, detail="Please select at least 2 completed video parts to merge.")
+
+    resolved_video_paths = []
+    for tid in req.task_ids:
+        tdata = load_task_from_disk(tid)
+        if not tdata:
+            raise HTTPException(status_code=404, detail=f"Task record not found for ID: {tid}")
+        
+        out_path = tdata.get("output_path")
+        if not out_path or not os.path.exists(out_path):
+            # Try to resolve directly inside output folder
+            candidate = os.path.join("output", f"dubbed_{tid}_{sanitize_filename(tdata.get('filename', ''))}.mp4")
+            if os.path.exists(candidate):
+                out_path = candidate
+            else:
+                raise HTTPException(status_code=404, detail=f"Video file missing on disk for task {tid}")
+        resolved_video_paths.append(os.path.abspath(out_path))
+
+    merge_id = str(os.urandom(4).hex())
+    clean_title = sanitize_filename(req.custom_title)
+    merged_filename = f"merged_{merge_id}_{clean_title}.mp4"
+    merged_output_path = os.path.join("output", merged_filename)
+
+    concat_txt_path = os.path.join("output", f"temp_concat_{merge_id}.txt")
+    with open(concat_txt_path, "w", encoding="utf-8") as f:
+        for vp in resolved_video_paths:
+            # Escape path properly for FFmpeg concat demuxer
+            clean_vp = vp.replace("\\", "/").replace("'", "'\\''")
+            f.write(f"file '{clean_vp}'\n")
+
+    try:
+        # 1. First attempt: Super-fast stream copy concat (zero quality loss)
+        cmd_copy = [
+            FFMPEG_PATH, "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", concat_txt_path,
+            "-c", "copy",
+            "-movflags", "+faststart",
+            merged_output_path
+        ]
+        res = subprocess.run(cmd_copy, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        # 2. Fallback: If copy fails due to minor parameter difference, re-encode seamlessly
+        if res.returncode != 0 or not os.path.exists(merged_output_path) or os.path.getsize(merged_output_path) < 1000:
+            input_args = []
+            filter_inputs = []
+            for i, vp in enumerate(resolved_video_paths):
+                input_args.extend(["-i", vp])
+                filter_inputs.append(f"[{i}:v:0][{i}:a:0]")
+            
+            filter_complex_str = f"{''.join(filter_inputs)}concat=n={len(resolved_video_paths)}:v=1:a=1[outv][outa]"
+            cmd_reencode = [
+                FFMPEG_PATH, "-y",
+                *input_args,
+                "-filter_complex", filter_complex_str,
+                "-map", "[outv]", "-map", "[outa]",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "192k",
+                "-movflags", "+faststart",
+                merged_output_path
+            ]
+            res_fb = subprocess.run(cmd_reencode, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if res_fb.returncode != 0 or not os.path.exists(merged_output_path):
+                raise RuntimeError(f"FFmpeg video merge failed: {res_fb.stderr[:200]}")
+
+        # Register merged full movie into history
+        task_data[merge_id] = {
+            "task_id": merge_id,
+            "filename": f"Full Merged: {clean_title}",
+            "status": {
+                "status": "completed",
+                "step": f"Successfully merged {len(resolved_video_paths)} parts!",
+                "progress": 100,
+                "output_video": f"/output/{merged_filename}",
+                "output_srt": ""
+            },
+            "output_path": merged_output_path,
+            "segments": [],
+            "bg_volume": 0.18,
+            "voice_volume": 1.6,
+            "audio_mode": "both",
+            "add_watermark": False,
+            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        save_task_to_disk(merge_id)
+
+        return {
+            "success": True,
+            "merged_task_id": merge_id,
+            "output_video": f"/output/{merged_filename}",
+            "filename": merged_filename,
+            "parts_merged": len(resolved_video_paths)
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Merge error: {str(e)}")
+    finally:
+        if os.path.exists(concat_txt_path):
+            try:
+                os.remove(concat_txt_path)
+            except Exception:
+                pass
 
 @app.get("/", response_class=HTMLResponse)
 async def read_index(request: Request):
@@ -1162,7 +1299,6 @@ async def background_download_video(download_id: str, url: str, sublang: Optiona
         cleaned_url = clean_media_url(url)
         temp_id = download_id
 
-        # Direct CDN / .f4v / .m3u8 Stream Downloader
         if any(ext in cleaned_url.lower() for ext in [".f4v", ".m3u8", ".mpd", "71edge.com", "googlevideo.com"]):
             output_filename = f"{temp_id}_stream_video.mp4"
             output_path = os.path.join("input", output_filename)
@@ -1234,7 +1370,6 @@ async def background_download_video(download_id: str, url: str, sublang: Optiona
             }
             return
 
-        # High-Resolution (1080p/4K) Downloader
         output_template = os.path.join("input", f"{temp_id}_%(title).100B.%(ext)s")
         languages_to_fetch = [sublang] if sublang and sublang.strip() else ['en', 'en-US', 'zh', 'ja', 'ko', 'all']
         

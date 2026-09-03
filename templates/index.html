@@ -297,12 +297,30 @@
                 <span id="progressPercentageText" class="text-[11px] text-slate-400 font-mono font-bold">0%</span>
             </div>
 
-            <!-- RECENT PROJECTS HISTORY SECTION -->
+            <!-- 🌟 RECENT PROJECTS HISTORY & MERGER TOOLBAR -->
             <div class="bg-slate-900/90 backdrop-blur border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
-                <div class="flex items-center space-x-2 border-b border-slate-800/80 pb-2.5">
-                    <span class="text-sm">📁</span>
-                    <h2 class="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono">Recent Dubbed Projects History</h2>
+                <div class="flex justify-between items-center border-b border-slate-800/80 pb-2.5">
+                    <div class="flex items-center space-x-2">
+                        <span class="text-sm">📁</span>
+                        <h2 class="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono">Recent Dubbed Projects History</h2>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <button id="mergeActionBtn" onclick="triggerMergeVideos()" disabled 
+                            class="bg-indigo-600/50 hover:bg-indigo-500 text-white px-3 py-1 rounded-lg text-xs font-mono font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center space-x-1 shadow">
+                            <span>🔗 Merge (<span id="selectedCount">0</span>)</span>
+                        </button>
+                    </div>
                 </div>
+
+                <!-- Select All Shortcut -->
+                <div class="flex items-center justify-between text-[11px] px-1 text-slate-400">
+                    <label class="flex items-center space-x-1.5 cursor-pointer select-none">
+                        <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)" class="accent-indigo-500 rounded">
+                        <span>Select All for Merge</span>
+                    </label>
+                    <span class="text-[10px] text-indigo-400">Check clips in order to merge into 1 video</span>
+                </div>
+
                 <div id="historyContainer" class="space-y-2 max-h-[300px] overflow-y-auto pr-1">
                     <p class="text-xs text-slate-500 text-center py-4">Loading project history...</p>
                 </div>
@@ -318,6 +336,7 @@
         let activeTrimDuration = 0;
         let activeTranslateFilename = null;
         let currentSplitMode = 'manual';
+        let selectedMergeTaskIds = [];
 
         function switchTab(tab) {
             const fileContent = document.getElementById('tabFileContent');
@@ -654,6 +673,7 @@
                 const history = await res.json();
                 if (history.length === 0) {
                     container.innerHTML = `<p class="text-xs text-slate-500 text-center py-4">No previous dubbed projects found.</p>`;
+                    updateMergeButtonState();
                     return;
                 }
                 
@@ -661,18 +681,94 @@
 
                 container.innerHTML = history.map(item => `
                     <div class="bg-slate-950 border border-slate-800 rounded-xl p-2.5 flex justify-between items-center text-xs hover:border-slate-700 transition">
-                        <div class="truncate max-w-[180px] md:max-w-xs">
-                            <span class="font-bold text-slate-200 truncate">${item.filename}</span>
-                            <span class="text-slate-500 ml-2 font-mono text-[10px]">${item.updated_at}</span>
+                        <div class="flex items-center space-x-2.5 truncate max-w-[200px] md:max-w-xs">
+                            <input type="checkbox" value="${item.task_id}" onchange="onMergeCheckboxChange()" class="merge-checkbox accent-indigo-500 rounded cursor-pointer">
+                            <div class="truncate">
+                                <span class="font-bold text-slate-200 truncate">${item.filename}</span>
+                                <span class="text-slate-500 block font-mono text-[10px]">${item.updated_at}</span>
+                            </div>
                         </div>
                         <div class="flex items-center space-x-1.5 shrink-0">
+                            <a href="${item.output_video}" target="_blank" class="bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 px-2 py-1 rounded transition font-mono text-[10px] border border-emerald-800/40" title="Watch Video">▶ Play</a>
                             <a href="/editor/${item.task_id}" class="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded transition font-mono text-[10px]">Edit</a>
                             <button onclick="deleteHistory('${item.task_id}')" class="bg-red-950/60 hover:bg-red-900 text-red-300 px-2 py-1 rounded transition text-[10px] border border-red-900/50">🗑️</button>
                         </div>
                     </div>
                 `).join('');
+
+                updateMergeButtonState();
             } catch (err) {
                 container.innerHTML = `<p class="text-xs text-red-400 text-center py-4">Failed to load history.</p>`;
+            }
+        }
+
+        function onMergeCheckboxChange() {
+            const checkboxes = document.querySelectorAll('.merge-checkbox:checked');
+            selectedMergeTaskIds = Array.from(checkboxes).map(cb => cb.value);
+            updateMergeButtonState();
+        }
+
+        function toggleSelectAll(masterCb) {
+            const checkboxes = document.querySelectorAll('.merge-checkbox');
+            checkboxes.forEach(cb => cb.checked = masterCb.checked);
+            onMergeCheckboxChange();
+        }
+
+        function updateMergeButtonState() {
+            const count = selectedMergeTaskIds.length;
+            const countSpan = document.getElementById('selectedCount');
+            const mergeBtn = document.getElementById('mergeActionBtn');
+            if (countSpan) countSpan.innerText = count;
+
+            if (mergeBtn) {
+                if (count >= 2) {
+                    mergeBtn.disabled = false;
+                    mergeBtn.className = "bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded-lg text-xs font-mono font-semibold transition shadow cursor-pointer";
+                } else {
+                    mergeBtn.disabled = true;
+                    mergeBtn.className = "bg-indigo-600/50 text-white/50 px-3 py-1 rounded-lg text-xs font-mono font-semibold transition opacity-40 cursor-not-allowed";
+                }
+            }
+        }
+
+        async function triggerMergeVideos() {
+            if (selectedMergeTaskIds.length < 2) {
+                alert("Please select at least 2 completed video parts to merge.");
+                return;
+            }
+
+            const title = prompt("Enter a name for the merged video file:", "Full_Continuous_Drama");
+            if (!title) return;
+
+            const mergeBtn = document.getElementById('mergeActionBtn');
+            mergeBtn.disabled = true;
+            mergeBtn.innerText = "⏳ Merging...";
+
+            try {
+                const res = await fetch('/api/merge-videos', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        task_ids: selectedMergeTaskIds,
+                        custom_title: title
+                    })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    alert(`🎉 Successfully merged ${data.parts_merged} parts into:\n${data.filename}`);
+                    selectedMergeTaskIds = [];
+                    const selectAll = document.getElementById('selectAllCheckbox');
+                    if (selectAll) selectAll.checked = false;
+                    loadHistory();
+                } else {
+                    alert("Merge failed: " + (data.detail || "Unknown error"));
+                }
+            } catch (err) {
+                console.error(err);
+                alert("Network error while merging videos.");
+            } finally {
+                updateMergeButtonState();
             }
         }
 
