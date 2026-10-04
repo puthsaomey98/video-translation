@@ -147,7 +147,7 @@
         <!-- RIGHT COLUMN (5 Cols): Modals/Configurators & Project History -->
         <div class="lg:col-span-5 space-y-6">
             
-            <!-- STEP 3: ADVANCED SPLITTER & TIMELINE SELECTOR MODAL -->
+            <!-- STEP 3: ADVANCED SPLITTER MODAL -->
             <div id="trimmerCard" class="bg-slate-900 border border-indigo-500/30 rounded-2xl p-5 shadow-2xl space-y-4 hidden animate-fadeIn">
                 <div class="flex justify-between items-center border-b border-slate-800 pb-2.5">
                     <div>
@@ -159,20 +159,17 @@
                     <span id="videoDurationLabel" class="text-[10px] bg-indigo-950/80 text-indigo-300 px-2.5 py-0.5 rounded-full border border-indigo-800/50 font-mono font-medium">0s</span>
                 </div>
 
-                <!-- Split Mode Toggle Tabs -->
                 <div class="flex space-x-1.5 border-b border-slate-800 pb-2.5">
                     <button onclick="switchSplitMode('manual')" id="btnManualMode" class="flex-1 bg-indigo-600 text-white text-xs font-semibold py-1.5 rounded-xl transition shadow">✂️ Manual Slice</button>
                     <button onclick="switchSplitMode('auto')" id="btnAutoMode" class="flex-1 bg-slate-800 text-slate-300 text-xs font-semibold py-1.5 rounded-xl transition hover:bg-slate-700">⚡ Auto Equal Chunks</button>
                 </div>
 
-                <!-- Video Preview Player -->
                 <div class="w-full bg-black rounded-xl overflow-hidden flex items-center justify-center border border-slate-800 max-h-[180px]">
                     <video id="previewPlayer" controls class="w-full h-full object-contain max-h-[160px]">
                         Your browser does not support video preview.
                     </video>
                 </div>
 
-                <!-- Manual Slice Panel -->
                 <div id="manualSplitPanel" class="grid grid-cols-2 gap-3 bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs">
                     <div>
                         <label class="block text-[10px] text-slate-400 font-mono uppercase mb-1">Start (sec)</label>
@@ -184,7 +181,6 @@
                     </div>
                 </div>
 
-                <!-- Auto-Split Panel -->
                 <div id="autoSplitPanel" class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2 hidden text-xs">
                     <label class="block text-[10px] text-slate-400 font-mono uppercase">Chunk Duration (Minutes)</label>
                     <div class="flex items-center space-x-2">
@@ -193,7 +189,6 @@
                     </div>
                 </div>
 
-                <!-- Action Buttons -->
                 <div class="flex justify-end space-x-2 pt-1">
                     <button onclick="closeTrimmer()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold px-3.5 py-2 rounded-xl transition">Cancel</button>
                     <button id="executeSplitBtn" onclick="executeSplitAction()" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-lg transition">
@@ -221,6 +216,21 @@
                         <option value="voice_only">🎙️ Khmer Voice Only (No Background Music)</option>
                         <option value="subtitle">📄 Subtitle Only (Khmer .srt Only)</option>
                     </select>
+                </div>
+
+                <!-- BLUR SUBTITLES TOGGLE -->
+                <div class="bg-slate-950 p-3.5 rounded-xl border border-cyan-500/40 flex items-center justify-between">
+                    <div class="space-y-0.5">
+                        <div class="flex items-center space-x-1.5">
+                            <span class="text-sm">🌫️</span>
+                            <span class="text-xs font-bold text-cyan-300 font-mono uppercase">Blur Existing Subtitles</span>
+                        </div>
+                        <p class="text-[10px] text-slate-400">Blurs hardcoded Chinese/English text to prevent Facebook OCR detection.</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="blurSubtitlesCheckbox" class="sr-only peer" checked>
+                        <div class="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cyan-600"></div>
+                    </label>
                 </div>
 
                 <!-- Animated Watermark Logo Option -->
@@ -297,7 +307,7 @@
                 <span id="progressPercentageText" class="text-[11px] text-slate-400 font-mono font-bold">0%</span>
             </div>
 
-            <!-- 🌟 RECENT PROJECTS HISTORY & MERGER TOOLBAR -->
+            <!-- RECENT PROJECTS HISTORY & MERGER TOOLBAR -->
             <div class="bg-slate-900/90 backdrop-blur border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
                 <div class="flex justify-between items-center border-b border-slate-800/80 pb-2.5">
                     <div class="flex items-center space-x-2">
@@ -312,7 +322,6 @@
                     </div>
                 </div>
 
-                <!-- Select All Shortcut -->
                 <div class="flex items-center justify-between text-[11px] px-1 text-slate-400">
                     <label class="flex items-center space-x-1.5 cursor-pointer select-none">
                         <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)" class="accent-indigo-500 rounded">
@@ -702,16 +711,33 @@
             }
         }
 
+        // 🌟 EXACT CLICK SEQUENCE TRACKER FOR MERGING
         function onMergeCheckboxChange() {
-            const checkboxes = document.querySelectorAll('.merge-checkbox:checked');
-            selectedMergeTaskIds = Array.from(checkboxes).map(cb => cb.value);
+            const checkboxes = document.querySelectorAll('.merge-checkbox');
+            
+            checkboxes.forEach(cb => {
+                const id = cb.value;
+                const index = selectedMergeTaskIds.indexOf(id);
+                
+                if (cb.checked && index === -1) {
+                    selectedMergeTaskIds.push(id);
+                } else if (!cb.checked && index !== -1) {
+                    selectedMergeTaskIds.splice(index, 1);
+                }
+            });
+
             updateMergeButtonState();
         }
 
         function toggleSelectAll(masterCb) {
             const checkboxes = document.querySelectorAll('.merge-checkbox');
             checkboxes.forEach(cb => cb.checked = masterCb.checked);
-            onMergeCheckboxChange();
+            
+            selectedMergeTaskIds = [];
+            if (masterCb.checked) {
+                checkboxes.forEach(cb => selectedMergeTaskIds.push(cb.value));
+            }
+            updateMergeButtonState();
         }
 
         function updateMergeButtonState() {
@@ -756,7 +782,7 @@
 
                 const data = await res.json();
                 if (data.success) {
-                    alert(`🎉 Successfully merged ${data.parts_merged} parts into:\n${data.filename}`);
+                    alert(`🎉 Successfully merged ${data.parts_merged} parts in your selected order into:\n${data.filename}`);
                     selectedMergeTaskIds = [];
                     const selectAll = document.getElementById('selectAllCheckbox');
                     if (selectAll) selectAll.checked = false;
@@ -928,6 +954,9 @@
             document.getElementById('translateModalFilename').innerText = `File: ${filename}`;
             document.getElementById('pastedScriptInput').value = '';
             
+            const blurCb = document.getElementById('blurSubtitlesCheckbox');
+            if (blurCb) blurCb.checked = true;
+
             try {
                 const res = await fetch('/api/input-subtitles');
                 const subtitles = await res.json();
@@ -967,6 +996,7 @@
             const outputMode = document.getElementById('outputModeSelect').value;
             const pastedScript = document.getElementById('pastedScriptInput').value.trim();
             const addWatermark = document.getElementById('addWatermarkCheckbox').checked;
+            const blurSubtitles = document.getElementById('blurSubtitlesCheckbox').checked;
 
             closeTranslateModal();
 
@@ -984,7 +1014,8 @@
                         subtitle_filename: subtitleFilename ? subtitleFilename : null,
                         output_mode: outputMode,
                         pasted_script: pastedScript ? pastedScript : null,
-                        add_watermark: addWatermark
+                        add_watermark: addWatermark,
+                        blur_subtitles: blurSubtitles
                     })
                 });
                 const data = await res.json();

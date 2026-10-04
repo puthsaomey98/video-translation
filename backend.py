@@ -6,6 +6,9 @@ import re
 import json
 import time
 import random
+import math
+import base64
+import shutil
 import platform
 import urllib.request
 import numpy as np
@@ -15,13 +18,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import List, Optional
+from PIL import Image, ImageDraw, ImageFont
 
 try:
     import yt_dlp
 except ImportError:
     yt_dlp = None
 
-# Auto-locate and bind FFmpeg binary to PATH to unlock high-res DASH stream merging
 try:
     import imageio_ffmpeg
     FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
@@ -38,17 +41,21 @@ from core.translator import KhmerTranslator
 from core.tts import generate_segment_audio, format_time
 
 try:
-    from moviepy import AudioFileClip, VideoFileClip, CompositeAudioClip
+    from moviepy import AudioFileClip, VideoFileClip, CompositeAudioClip, concatenate_audioclips
 except ImportError:
-    from moviepy.editor import AudioFileClip, VideoFileClip, CompositeAudioClip
+    from moviepy.editor import AudioFileClip, VideoFileClip, CompositeAudioClip, concatenate_audioclips
 
-app = FastAPI(title="Khmer Video Dubbing Studio & Timeline Editor")
+app = FastAPI(title="Khmer Video Dubbing Studio & Anti-Copyright Engine")
+
+# Speed factor to break temporal Content ID matching (4.5% speedup)
+SPEED_FACTOR = 1.045
 
 os.makedirs("input", exist_ok=True)
 os.makedirs("output", exist_ok=True)
 os.makedirs("temp_separated", exist_ok=True)
 os.makedirs("history", exist_ok=True)
-os.makedirs("safe_bgm", exist_ok=True)  # Royalty-free BGM folder to bypass copyright strikes
+os.makedirs("safe_bgm", exist_ok=True)
+os.makedirs("fonts", exist_ok=True)
 
 app.mount("/output", StaticFiles(directory="output"), name="output")
 app.mount("/input", StaticFiles(directory="input"), name="input")
@@ -62,6 +69,211 @@ ZH_TYPO_MAP = {
     "进房炮": "近防炮",
 }
 
+def find_headless_browser() -> Optional[str]:
+    """Finds Microsoft Edge or Google Chrome to render HarfBuzz Khmer shaping."""
+    win_paths = [
+        os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "Microsoft", "Edge", "Application", "msedge.exe"),
+        os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "Microsoft", "Edge", "Application", "msedge.exe"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "Application", "msedge.exe"),
+        os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+    ]
+    for p in win_paths:
+        if os.path.exists(p):
+            return p
+    for name in ["msedge", "chrome", "google-chrome", "chromium"]:
+        w = shutil.which(name)
+        if w:
+            return w
+    return None
+
+def get_font_file_path() -> Optional[str]:
+    """Finds the path to KhmerFont.ttf or standard Windows Khmer fonts."""
+    candidate_paths = [
+        os.path.join("fonts", "KhmerFont.ttf"),
+        "KhmerFont.ttf",
+        os.path.join(os.getcwd(), "fonts", "KhmerFont.ttf"),
+        os.path.join(os.getcwd(), "KhmerFont.ttf"),
+        os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "LeelawUI.ttf"),
+        os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "LeelaUIb.ttf"),
+        os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "KhmerUI.ttf")
+    ]
+    for p in candidate_paths:
+        if os.path.exists(p) and os.path.getsize(p) > 2000:
+            return os.path.abspath(p)
+    return None
+
+def create_recap_banner(vw: int, vh: int, banner_text: str, output_path: str) -> Optional[str]:
+    """
+    Renders 100% grammatically correct Khmer script (stacked subscripts & vowels)
+    at the top banner on a single line.
+    """
+    top_bar_h = int(vh * 0.13)
+    # Scale font size based on width and height to strictly fit within one line
+    font_size = max(18, min(int(top_bar_h * 0.32), int(vw * 0.038)))
+
+    browser_path = find_headless_browser()
+    font_path = get_font_file_path()
+
+    font_face_css = ""
+    if font_path and os.path.exists(font_path):
+        try:
+            with open(font_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+            font_face_css = f"""
+            @font-face {{
+                font-family: 'LocalKhmer';
+                src: url('data:font/truetype;charset=utf-8;base64,{b64}') format('truetype');
+                font-weight: bold;
+            }}
+            """
+        except Exception as e:
+            print(f"⚠️ Font embedding warning: {e}")
+
+    # 1. Primary Engine: Headless Browser for Perfect Khmer Typography
+    if browser_path:
+        temp_html_path = output_path.replace(".png", ".html")
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@700&family=Noto+Sans+Khmer:wght@700&display=swap');
+{font_face_css}
+* {{
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}}
+body {{
+    width: {vw}px;
+    height: {vh}px;
+    background-color: transparent;
+    overflow: hidden;
+    font-family: 'LocalKhmer', 'Kantumruy Pro', 'Noto Sans Khmer', 'Leelawadee UI', 'Khmer OS Siemreap', 'Khmer OS', sans-serif;
+}}
+.top-bar {{
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: {vw}px;
+    height: {top_bar_h}px;
+    background-color: #0c0c10;
+    border-bottom: 3.5px solid #ffd700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 0 16px;
+}}
+.top-title {{
+    color: #ffffff;
+    font-size: {font_size}px;
+    font-weight: bold;
+    text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.95);
+    line-height: 1.3;
+    white-space: nowrap;
+}}
+</style>
+</head>
+<body>
+    <div class="top-bar">
+        <div class="top-title">{banner_text}</div>
+    </div>
+</body>
+</html>"""
+        try:
+            with open(temp_html_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+
+            file_url = f"file:///{os.path.abspath(temp_html_path).replace(os.sep, '/')}"
+            cmd = [
+                browser_path,
+                "--headless=new",
+                "--disable-gpu",
+                "--no-sandbox",
+                f"--window-size={vw},{vh}",
+                "--force-device-scale-factor=1",
+                "--default-background-color=00000000",
+                "--hide-scrollbars",
+                f"--screenshot={os.path.abspath(output_path)}",
+                file_url
+            ]
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=12)
+
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                with Image.open(output_path) as im:
+                    if im.size != (vw, vh):
+                        im = im.resize((vw, vh), Image.Resampling.LANCZOS)
+                        im.save(output_path, "PNG")
+                return output_path
+        except Exception as e:
+            print(f"⚠️ Headless browser render failed: {e}")
+        finally:
+            if os.path.exists(temp_html_path):
+                try:
+                    os.remove(temp_html_path)
+                except Exception:
+                    pass
+
+    # 2. Secondary Engine: FFmpeg ASS Subtitle (Native HarfBuzz)
+    try:
+        temp_ass = output_path.replace(".png", ".ass")
+        top_font_size = max(18, min(int(vh * 0.025), int(vw * 0.038)))
+        top_margin = int(vh * 0.045)
+
+        ass_content = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {vw}
+PlayResY: {vh}
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: TopStyle,KhmerFont,{top_font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,2,8,15,15,{top_margin},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,TopStyle,,0,0,0,,{banner_text}
+"""
+        with open(temp_ass, "w", encoding="utf-8") as f:
+            f.write(ass_content)
+
+        clean_ass = os.path.abspath(temp_ass).replace("\\", "/").replace(":", "\\:")
+        filter_str = (
+            f"drawbox=x=0:y=0:w={vw}:h={top_bar_h}:color=0x0c0c10@1.0:t=fill,"
+            f"drawbox=x=0:y={top_bar_h - 3}:w={vw}:h=3:color=0xffd700@1.0:t=fill,"
+            f"subtitles={clean_ass}:fontsdir=fonts"
+        )
+        cmd = [
+            FFMPEG_PATH, "-y",
+            "-f", "lavfi", "-i", f"color=c=black@0.0:s={vw}x{vh}:d=1",
+            "-vf", filter_str,
+            "-frames:v", "1",
+            output_path
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if os.path.exists(temp_ass):
+            try:
+                os.remove(temp_ass)
+            except Exception:
+                pass
+        if res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+            return output_path
+    except Exception as e:
+        print(f"⚠️ FFmpeg ASS banner fallback error: {e}")
+
+    # 3. Tertiary Fallback: Pillow basic banner box
+    try:
+        img = Image.new("RGBA", (vw, vh), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([0, 0, vw, top_bar_h], fill=(12, 12, 16, 255))
+        draw.line([0, top_bar_h - 3, vw, top_bar_h - 3], fill=(255, 215, 0, 240), width=3)
+        img.save(output_path, "PNG")
+        return output_path
+    except Exception:
+        return None
+
 def get_logo_path() -> Optional[str]:
     possible_names = [
         "logo.png", "logo.jpg", "logo.jpeg", "logo.webp",
@@ -71,25 +283,71 @@ def get_logo_path() -> Optional[str]:
     for name in possible_names:
         if os.path.exists(name) and os.path.getsize(name) > 0:
             return os.path.abspath(name)
-            
+
     try:
         for f in os.listdir("."):
             if f.lower().startswith(("logo", "watermark")) and f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
                 return os.path.abspath(f)
     except Exception:
         pass
-        
+
     return None
 
-def get_safe_bgm_track() -> Optional[str]:
-    """Retrieves a random royalty-free audio file from the safe_bgm folder if present."""
-    safe_dir = "safe_bgm"
-    if os.path.exists(safe_dir):
-        valid_exts = (".mp3", ".wav", ".aac", ".m4a", ".ogg")
-        tracks = [os.path.join(safe_dir, f) for f in os.listdir(safe_dir) if f.lower().endswith(valid_exts)]
-        if tracks:
-            return os.path.abspath(random.choice(tracks))
-    return None
+def get_random_safe_bgm() -> Optional[str]:
+    """Retrieves a random royalty-free audio file from safe_bgm/ to mask Content ID."""
+    if not os.path.exists("safe_bgm"):
+        return None
+    valid_exts = ('.mp3', '.wav', '.ogg', '.m4a', '.aac')
+    bgm_files = [os.path.join("safe_bgm", f) for f in os.listdir("safe_bgm") if f.lower().endswith(valid_exts)]
+    return random.choice(bgm_files) if bgm_files else None
+
+def extract_sfx_and_remove_bgm(input_audio_path: str, task_id: str) -> str:
+    output_sfx_path = os.path.join("temp_separated", f"sfx_only_{task_id}.wav")
+    try:
+        import librosa
+        try:
+            import soundfile as sf
+        except ImportError:
+            sf = None
+
+        y, sr = librosa.load(input_audio_path, sr=24000, mono=True)
+        _, y_percussive = librosa.effects.hpss(y, margin=(1.0, 3.0))
+
+        if sf:
+            sf.write(output_sfx_path, y_percussive, sr)
+        else:
+            from scipy.io import wavfile
+            wavfile.write(output_sfx_path, sr, (y_percussive * 32767).astype(np.int16))
+
+        if os.path.exists(output_sfx_path) and os.path.getsize(output_sfx_path) > 1000:
+            filtered_sfx_path = os.path.join("temp_separated", f"sfx_filtered_{task_id}.wav")
+            filter_str = "highpass=f=200,lowpass=f=7200,agate=range=-40dB:threshold=0.08:attack=2:release=90"
+            cmd_filter = [FFMPEG_PATH, "-y", "-i", output_sfx_path, "-filter:a", filter_str, filtered_sfx_path]
+            res_f = subprocess.run(cmd_filter, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res_f.returncode == 0 and os.path.exists(filtered_sfx_path):
+                return filtered_sfx_path
+            return output_sfx_path
+    except Exception:
+        pass
+
+    try:
+        filter_str = (
+            "highpass=f=220,lowpass=f=7500,"
+            "agate=range=-40dB:threshold=0.08:attack=2:release=90,"
+            "alimiter=limit=0.9"
+        )
+        cmd = [
+            FFMPEG_PATH, "-y", "-i", input_audio_path,
+            "-filter:a", filter_str,
+            output_sfx_path
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode == 0 and os.path.exists(output_sfx_path):
+            return output_sfx_path
+    except Exception:
+        pass
+
+    return input_audio_path
 
 def preprocess_source_text(text: str, source_lang: str) -> str:
     if not text:
@@ -273,27 +531,28 @@ def get_video_duration(video_path: str) -> float:
 def clean_khmer_text(text: str) -> str:
     if not text:
         return ""
-    
+
     text = re.sub(r'\[.*?\]|\(.*?\)', '', text)
     text = re.sub(r'<.*?>', '', text)
-    
+
     spoken_rules = [
         (r'\bអញ\b', 'ខ្ញុំ'),
         (r'ត្រូវបាន\s*', ''),
         (r'\s+នៃ\s+', ' '),
         (r'មិនមែនទេ', 'អត់ទេ'),
-        (r'យ៉ាងណាក៏ដោយ', 'ប៉ុន្តែ'),
+        (r'យ៉ាងណាក៏ដោយ', 'តែ'),
         (r'លើសពីនេះទៅទៀត', 'ហើយ'),
         (r'ជាមួយគ្នានេះដែរ', 'ហើយ'),
         (r'រូបលោក', 'គាត់'),
         (r'លោកអ្នក', 'អ្នក'),
         (r'តើ\s+(.*?)\s+ឬទេ\?', r'\1 មែនទេ?'),
         (r'តើ\s+', ''),
+        (r'សូមជម្រាបថា\s*', ''),
     ]
-    
+
     for pattern, replacement in spoken_rules:
         text = re.sub(pattern, replacement, text)
-        
+
     return re.sub(r'\s+', ' ', text).strip()
 
 def safe_translate_and_clean(translator, text: str, source_lang: str) -> str:
@@ -338,10 +597,10 @@ def process_pasted_script_to_srt(pasted_text: str, video_path: str, output_srt_p
     for idx, line in enumerate(lines, start=1):
         start_sec = (idx - 1) * time_per_line
         end_sec = min(video_duration, start_sec + time_per_line - 0.2)
-        
+
         start_fmt = format_time(start_sec)
         end_fmt = format_time(end_sec)
-        
+
         srt_lines.append(f"{idx}\n{start_fmt} --> {end_fmt}\n{clean_khmer_text(line)}\n")
 
     with open(output_srt_path, "w", encoding="utf-8") as f:
@@ -352,53 +611,53 @@ def process_pasted_script_to_srt(pasted_text: str, video_path: str, output_srt_p
 def detect_segment_gender(vocals_path: str, start_sec: float, end_sec: float) -> str:
     if not vocals_path or not os.path.exists(vocals_path):
         return "female"
-        
+
     try:
         import librosa
         duration = max(0.4, end_sec - start_sec)
         y, sr = librosa.load(vocals_path, sr=16000, offset=start_sec, duration=duration)
-        
+
         if len(y) == 0 or np.max(np.abs(y)) < 0.01:
             return "female"
-            
+
         f0, voiced_flag, _ = librosa.pyin(
-            y, 
-            fmin=librosa.note_to_hz('C2'), 
-            fmax=librosa.note_to_hz('C6'), 
+            y,
+            fmin=librosa.note_to_hz('C2'),
+            fmax=librosa.note_to_hz('C6'),
             sr=sr
         )
-        
+
         voiced_f0 = f0[voiced_flag & ~np.isnan(f0)]
-        
+
         if len(voiced_f0) > 0:
             median_f0 = float(np.median(voiced_f0))
             return "female" if median_f0 > 145.0 else "male"
     except Exception:
         pass
-        
+
     return "female"
 
 def fit_and_normalize_audio_segment(input_audio_path: str, target_duration: float, output_audio_path: str):
     try:
         with AudioFileClip(input_audio_path) as clip:
             actual_duration = clip.duration
-        
+
         speed = 1.0
         target_duration = max(0.1, target_duration)
         if actual_duration > 0:
             speed = actual_duration / target_duration
-            if speed < 0.75:
-                speed = 0.75
-            elif speed > 1.9:
-                speed = 1.9
+            if speed < 0.85:
+                speed = 0.85
+            elif speed > 1.5:
+                speed = 1.5
 
         filter_chain = []
-        if abs(speed - 1.0) > 0.05:
+        if abs(speed - 1.0) > 0.03:
             filter_chain.append(f"atempo={speed}")
-            
-        filter_chain.append("acompressor=threshold=-14dB:ratio=3.5:attack=5:release=80:makeup=3dB")
-        filter_chain.append("alimiter=limit=0.92")
-        
+
+        filter_chain.append("acompressor=threshold=-16dB:ratio=2.5:attack=10:release=100:makeup=2dB")
+        filter_chain.append("alimiter=limit=0.95")
+
         filter_str = ",".join(filter_chain)
 
         cmd = [
@@ -414,7 +673,7 @@ def fit_and_normalize_audio_segment(input_audio_path: str, target_duration: floa
             return output_audio_path
     except Exception:
         pass
-        
+
     return input_audio_path
 
 def apply_clip_start(clip, start_time):
@@ -434,34 +693,33 @@ def apply_clip_duration(clip, duration):
         return clip.with_duration(duration)
     return clip.set_duration(duration)
 
-def normalize_and_compress_bg_music(input_bg_path: str, output_bg_path: str) -> str:
-    """Tames loud peaks and modifies the acoustic profile to evade Meta's automated music fingerprinting."""
-    try:
-        filter_str = (
-            "highpass=f=60,lowpass=f=15000,"
-            "equalizer=f=1000:width_type=h:width=250:g=-3,"
-            "acompressor=threshold=-22dB:ratio=4.5:attack=10:release=120,"
-            "alimiter=limit=0.75"
-        )
-        cmd = [
-            FFMPEG_PATH, "-y", "-i", input_bg_path,
-            "-filter:a", filter_str,
-            output_bg_path
-        ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if res.returncode == 0 and os.path.exists(output_bg_path):
-            return output_bg_path
-    except Exception:
-        pass
-    return input_bg_path
-
-def merge_with_realtime_progress(task_id: str, video_path: str, background_audio_path: str, audio_segments: list, output_path: str, bg_volume: float = 0.18, voice_volume: float = 1.6, audio_mode: str = "both", add_watermark: bool = False):
+def merge_with_realtime_progress(
+    task_id: str,
+    video_path: str,
+    background_audio_path: str,
+    audio_segments: list,
+    output_path: str,
+    bg_volume: float = 0.0,
+    voice_volume: float = 1.8,
+    audio_mode: str = "both",
+    add_watermark: bool = False,
+    blur_subtitles: bool = False,
+    banner_bottom_text: str = "ចុច Follow ដើម្បីទស្សនាភាគបន្ត"
+):
     fitted_temp_files = []
     temp_mixed_audio = f"temp_mixed_audio_{task_id}.wav"
-    compressed_bg_path = f"temp_comp_bg_{task_id}.wav"
-    
+    temp_banner_path = f"temp_banner_{task_id}.png"
+    audio_clips = []
+
+    speed_factor = globals().get("SPEED_FACTOR", 1.045)
+    pts_factor = 1.0 / speed_factor
+
     try:
-        task_data[task_id]["status"] = {"status": "processing", "step": "Mixing clean audio tracks and soft BGM...", "progress": 82}
+        task_data[task_id]["status"] = {
+            "status": "processing",
+            "step": "Mixing Khmer voiceover, reduced SFX, and Safe BGM...",
+            "progress": 82
+        }
         save_task_to_disk(task_id)
 
         total_duration = get_video_duration(video_path)
@@ -469,33 +727,39 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
             with VideoFileClip(video_path) as v_test:
                 total_duration = v_test.duration
 
-        audio_clips = []
+        # 1. Background Movie SFX
+        include_sfx = (audio_mode in ["both", "bg_and_voice", "bg_only"]) and (bg_volume > 0.0)
+        if include_sfx and background_audio_path and os.path.exists(background_audio_path):
+            try:
+                sfx_clip = AudioFileClip(background_audio_path)
+                sfx_clip = apply_clip_volume(sfx_clip, bg_volume)
+                sfx_clip = apply_clip_duration(sfx_clip, total_duration)
+                audio_clips.append(sfx_clip)
+            except Exception as e:
+                print(f"⚠️ Warning loading SFX clip: {e}")
 
-        # 1. Background Music Track Processing (Compressed & Attenuated)
-        include_bg = (audio_mode in ["both", "bg_and_voice", "bg_only"]) and (bg_volume > 0.0)
-        if include_bg and background_audio_path and os.path.exists(background_audio_path):
-            active_bg_path = background_audio_path
-            
-            # Apply dynamic compression if mixing with voiceover to prevent loud SFX spikes
-            if audio_mode != "bg_only":
-                processed_bg = normalize_and_compress_bg_music(background_audio_path, compressed_bg_path)
-                if processed_bg == compressed_bg_path:
-                    fitted_temp_files.append(compressed_bg_path)
-                    active_bg_path = compressed_bg_path
+        # 2. Safe Royalty-Free BGM Layering
+        safe_bgm_track = get_random_safe_bgm()
+        if safe_bgm_track and os.path.exists(safe_bgm_track):
+            try:
+                bgm_clip = AudioFileClip(safe_bgm_track)
+                if bgm_clip.duration < total_duration:
+                    repeats = int(math.ceil(total_duration / max(0.1, bgm_clip.duration)))
+                    bgm_clip = concatenate_audioclips([bgm_clip] * repeats)
+                bgm_clip = apply_clip_duration(bgm_clip, total_duration)
+                bgm_clip = apply_clip_volume(bgm_clip, 0.18)
+                audio_clips.append(bgm_clip)
+            except Exception as e:
+                print(f"⚠️ Safe BGM loop notice: {e}")
 
-            bg_clip = AudioFileClip(active_bg_path)
-            bg_clip = apply_clip_volume(bg_clip, bg_volume)
-            bg_clip = apply_clip_duration(bg_clip, total_duration)
-            audio_clips.append(bg_clip)
-
-        # 2. Voiceover Track Processing
+        # 3. Khmer Narration Segments
         include_voice = (audio_mode in ["both", "bg_and_voice", "voice_only"]) and (voice_volume > 0.0)
         if include_voice and audio_segments:
             for i, seg in enumerate(audio_segments):
                 target_duration = seg["end"] - seg["start"]
                 fitted_path = f"temp_rerender_fitted_{task_id}_{i}.mp3"
                 processed_path = fit_and_normalize_audio_segment(seg["path"], target_duration, fitted_path)
-                
+
                 if processed_path == fitted_path:
                     fitted_temp_files.append(fitted_path)
 
@@ -510,7 +774,11 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
 
         final_audio = apply_clip_duration(CompositeAudioClip(audio_clips), total_duration)
 
-        task_data[task_id]["status"] = {"status": "processing", "step": "Exporting master audio track...", "progress": 88}
+        task_data[task_id]["status"] = {
+            "status": "processing",
+            "step": "Exporting master anti-copyright audio track...",
+            "progress": 88
+        }
         save_task_to_disk(task_id)
 
         final_audio.write_audiofile(
@@ -523,98 +791,177 @@ def merge_with_realtime_progress(task_id: str, video_path: str, background_audio
 
         final_audio.close()
         for clip in audio_clips:
-            clip.close()
+            try:
+                clip.close()
+            except Exception:
+                pass
 
-        task_data[task_id]["status"] = {"status": "processing", "step": "Applying transform filters to prevent unoriginal detection...", "progress": 94}
+        # 4. Anti-Copyright Visual Canvas & Recap Banner Filters
+        task_data[task_id]["status"] = {
+            "status": "processing",
+            "step": "Rendering Title Banner & Anti-Fingerprint Canvas...",
+            "progress": 94
+        }
         save_task_to_disk(task_id)
 
+        v_meta = get_video_dimensions_and_codec(video_path)
+        is_vertical = v_meta.get("is_vertical", False)
+        vw = v_meta.get("width", 0)
+        vh = v_meta.get("height", 0)
+
+        if vw <= 0 or vh <= 0:
+            vw, vh = (720, 1280) if is_vertical else (1280, 720)
+
+        vw = (int(vw) // 2) * 2
+        vh = (int(vh) // 2) * 2
+
+        # Generate recap banner with correct single-line Khmer typography
+        banner_file = create_recap_banner(vw, vh, banner_bottom_text, temp_banner_path)
+
+        # Subtitle blur bounding box
+        if is_vertical:
+            sub_w = (int(vw * 0.80) // 2) * 2
+            sub_h = (int(vh * 0.068) // 2) * 2
+            sub_x = (int((vw - sub_w) / 2) // 2) * 2
+            sub_y = (int(vh * 0.70) // 2) * 2
+        else:
+            sub_w = (int(vw * 0.75) // 2) * 2
+            sub_h = (int(vh * 0.075) // 2) * 2
+            sub_x = (int((vw - sub_w) / 2) // 2) * 2
+            sub_y = (int(vh * 0.81) // 2) * 2
+
+        # Scale centered drama clip to 72% height to leave clear margins for banner
+        scale_ratio = 0.72 if is_vertical else 0.75
+        fg_w = (int(vw * scale_ratio) // 2) * 2
+        fg_h = (int(vh * scale_ratio) // 2) * 2
+
+        fg_crop_w = (int(fg_w * 0.96) // 2) * 2
+        fg_crop_h = (int(fg_h * 0.96) // 2) * 2
+        fg_crop_x = (int((fg_w - fg_crop_w) / 2) // 2) * 2
+        fg_crop_y = (int((fg_h - fg_crop_h) / 2) // 2) * 2
+
+        filter_parts = []
+
+        if blur_subtitles:
+            filter_parts.append(f"[0:v]scale={vw}:{vh},split=2[v_base1][v_crop]")
+            filter_parts.append(f"[v_crop]crop={sub_w}:{sub_h}:{sub_x}:{sub_y},boxblur=16:2[v_blur]")
+            filter_parts.append(f"[v_base1][v_blur]overlay={sub_x}:{sub_y}[v_source]")
+        else:
+            filter_parts.append(f"[0:v]scale={vw}:{vh}[v_source]")
+
+        # Recap Canvas Generation (Blurred backdrop + Scaled centered drama clip)
+        filter_parts.extend([
+            f"[v_source]split=2[bg_in][fg_in]",
+            f"[bg_in]boxblur=26:5,eq=brightness=-0.25:contrast=1.05,setpts={pts_factor:.6f}*PTS[bg]",
+            f"[fg_in]scale={fg_w}:{fg_h},crop={fg_crop_w}:{fg_crop_h}:{fg_crop_x}:{fg_crop_y},"
+            f"hflip,eq=contrast=1.12:brightness=0.02:saturation=1.15:gamma=0.98,noise=alls=6:allf=t+u,"
+            f"setpts={pts_factor:.6f}*PTS[fg]",
+            f"[bg][fg]overlay=(W-w)/2:(H-h)/2[v_canvas]"
+        ])
+
+        input_index_tracker = 2
+        if banner_file and os.path.exists(banner_file):
+            filter_parts.append(f"[v_canvas][{input_index_tracker}:v]overlay=0:0[v_bannered]")
+            current_v = "[v_bannered]"
+            input_index_tracker += 1
+        else:
+            current_v = "[v_canvas]"
+
+        # Logo / Watermark
         logo_w = 80
         logo_path = get_logo_path()
-        print(f"🎨 [Watermark Render] Enabled: {add_watermark} | Detected Logo: {logo_path} | Size: {logo_w}x{logo_w}px")
+        has_logo = bool(add_watermark and logo_path and os.path.exists(logo_path))
 
-        base_visual_transform = (
-            "crop=trunc(in_w*0.96/2)*2:trunc(in_h*0.96/2)*2,scale=trunc(in_w/2)*2:trunc(in_h/2)*2,"
-            "eq=contrast=1.05:brightness=0.01:saturation=1.08,setpts=PTS/1.02"
-        )
-
-        if add_watermark and logo_path and os.path.exists(logo_path):
-            filter_complex_str = (
-                f"[0:v]{base_visual_transform}[vtransformed];"
-                f"[2:v]scale={logo_w}:{logo_w},format=rgba,"
+        if has_logo:
+            filter_parts.append(
+                f"[{input_index_tracker}:v]scale={logo_w}:{logo_w},format=rgba,"
                 f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-W/2,Y-H/2),W/2-1),255,0)',"
-                f"colorchannelmixer=aa=0.15[wm];"
-                f"[vtransformed][wm]overlay=x='-w+(mod(t\\,20)/7)*(W+w)':y='(H-h)/2':enable='lt(mod(t\\,20)\\,7)':eval=frame[v]"
+                f"colorchannelmixer=aa=0.18[wm]"
             )
-            cmd = [
-                FFMPEG_PATH, "-y",
-                "-i", video_path,
-                "-i", temp_mixed_audio,
-                "-loop", "1", "-i", logo_path,
-                "-filter_complex", filter_complex_str,
-                "-map", "[v]",
-                "-map", "1:a:0",
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-crf", "18",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-filter:a", "atempo=1.02",
-                "-map_metadata", "-1",
-                "-shortest",
-                "-movflags", "+faststart",
-                output_path
-            ]
+            filter_parts.append(
+                f"{current_v}[wm]overlay=x='-w+(mod(t\\,20)/7)*(W+w)':y='(H-h)/2':enable='lt(mod(t\\,20)\\,7)':eval=frame[v]"
+            )
         else:
-            cmd = [
-                FFMPEG_PATH, "-y",
-                "-i", video_path,
-                "-i", temp_mixed_audio,
-                "-vf", base_visual_transform,
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-crf", "18",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-filter:a", "atempo=1.02",
-                "-map_metadata", "-1",
-                "-shortest",
-                "-movflags", "+faststart",
-                output_path
-            ]
+            filter_parts.append(f"{current_v}null[v]")
+
+        filter_parts.append(f"[1:a:0]atempo={speed_factor}[a]")
+        filter_complex_str = ";".join(filter_parts)
+
+        cmd = [
+            FFMPEG_PATH, "-y",
+            "-i", video_path,
+            "-i", temp_mixed_audio
+        ]
+
+        if banner_file and os.path.exists(banner_file):
+            cmd.extend(["-i", banner_file])
+
+        if has_logo:
+            cmd.extend(["-loop", "1", "-i", logo_path])
+
+        cmd.extend([
+            "-filter_complex", filter_complex_str,
+            "-map", "[v]",
+            "-map", "[a]",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-map_metadata", "-1",
+            "-shortest",
+            "-movflags", "+faststart",
+            output_path
+        ])
 
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if result.returncode != 0 or not os.path.exists(output_path):
-            print(f"⚠️ Notice: FFmpeg primary encode failed: {result.stderr[:200]}")
+            error_details = result.stderr[-600:] if result.stderr else "Unknown error"
+            print(f"⚠️ Primary encode failed, retrying with fallback flags:\n{error_details}")
+
             fb_cmd = [
                 FFMPEG_PATH, "-y",
                 "-i", video_path,
-                "-i", temp_mixed_audio,
-                "-vf", base_visual_transform,
+                "-i", temp_mixed_audio
+            ]
+            if banner_file and os.path.exists(banner_file):
+                fb_cmd.extend(["-i", banner_file])
+            if has_logo:
+                fb_cmd.extend(["-loop", "1", "-i", logo_path])
+
+            fb_cmd.extend([
+                "-filter_complex", filter_complex_str,
+                "-map", "[v]",
+                "-map", "[a]",
                 "-c:v", "libx264",
                 "-preset", "veryfast",
                 "-crf", "20",
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
                 "-b:a", "192k",
-                "-filter:a", "atempo=1.02",
                 "-map_metadata", "-1",
                 "-shortest",
                 "-movflags", "+faststart",
                 output_path
-            ]
+            ])
             fb_res = subprocess.run(fb_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             if fb_res.returncode != 0:
-                raise RuntimeError(f"FFmpeg muxing failed: {fb_res.stderr}")
+                fb_error = fb_res.stderr[-600:] if fb_res.stderr else "Unknown fallback error"
+                raise RuntimeError(f"FFmpeg muxing failed: {fb_error}")
 
     except Exception as e:
-        raise RuntimeError(f"❌ Audio mixing failed: {str(e)}")
+        raise RuntimeError(f"❌ Video compilation failed: {str(e)}")
     finally:
         if os.path.exists(temp_mixed_audio):
             try:
                 os.remove(temp_mixed_audio)
+            except Exception:
+                pass
+        if os.path.exists(temp_banner_path):
+            try:
+                os.remove(temp_banner_path)
             except Exception:
                 pass
         for tmp_f in fitted_temp_files:
@@ -631,13 +978,13 @@ def parse_srt(srt_path: str) -> list:
     try:
         with open(srt_path, "r", encoding="utf-8-sig", errors="ignore") as f:
             content = f.read()
-        
+
         if content.startswith("WEBVTT"):
             content = content.split("\n\n", 1)[1] if "\n\n" in content else content
-            
+
         blocks = content.strip().split("\n\n")
         raw_segments = []
-        
+
         for block in blocks:
             lines = [l.strip() for l in block.strip().split("\n") if l.strip()]
             time_line_idx = -1
@@ -645,13 +992,13 @@ def parse_srt(srt_path: str) -> list:
                 if "-->" in line:
                     time_line_idx = idx
                     break
-            
+
             if time_line_idx != -1 and len(lines) > time_line_idx:
                 time_line = lines[time_line_idx]
                 parts = time_line.split("-->")
                 start_str = parts[0].strip().replace(',', '.')
                 end_str = parts[1].strip().split()[0].replace(',', '.')
-                
+
                 def time_to_sec(t_str):
                     t_parts = t_str.split(':')
                     try:
@@ -664,19 +1011,19 @@ def parse_srt(srt_path: str) -> list:
                     except ValueError:
                         return 0.0
                     return 0.0
-                
+
                 start_sec = time_to_sec(start_str)
                 end_sec = time_to_sec(end_str)
                 raw_text = " ".join(lines[time_line_idx + 1:])
                 text = clean_khmer_text(raw_text)
-                
+
                 if text.strip() and end_sec > start_sec:
                     raw_segments.append({
                         "start": start_sec,
                         "end": end_sec,
                         "text": text
                     })
-        
+
         raw_segments.sort(key=lambda x: x["start"])
         for i in range(len(raw_segments)):
             current = raw_segments[i]
@@ -716,56 +1063,71 @@ def split_srt_for_clip(source_srt, output_srt, start_time, end_time):
         for i, seg in enumerate(new_segments, 1):
             f.write(f"{i}\n{format_time(seg['start'])} --> {format_time(seg['end'])}\n{seg['text']}\n\n")
 
-def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output_path: str, filename: str, subtitle_filename: Optional[str] = None, output_mode: str = "both", voice_mode: str = "auto", add_watermark: bool = False):
+def run_dubbing_pipeline(
+    task_id: str,
+    video_path: str,
+    source_lang: str,
+    output_path: str,
+    filename: str,
+    subtitle_filename: Optional[str] = None,
+    output_mode: str = "both",
+    voice_mode: str = "auto",
+    add_watermark: bool = False,
+    blur_subtitles: bool = False,
+    banner_bottom_text: str = "ចុច Follow ដើម្បីទស្សនាភាគបន្ត"
+):
     try:
         translator = KhmerTranslator()
 
-        task_data[task_id]["status"] = {"status": "processing", "step": "Isolating audio & checking safe music...", "progress": 15}
+        task_data[task_id]["status"] = {"status": "processing", "step": "Separating vocals from background audio...", "progress": 15}
         save_task_to_disk(task_id)
 
         stems = extract_and_separate_audio(video_path, output_dir="./temp_separated")
         vocals_path = stems["vocals"]
-        
-        safe_music_choice = get_safe_bgm_track()
-        if safe_music_choice:
-            print(f"🎵 [Safe BGM Engine] Replaced copyrighted drama music with: {os.path.basename(safe_music_choice)}")
-            background_music_path = safe_music_choice
-        else:
-            background_music_path = stems["no_vocals"]
-        
-        public_bg_audio_name = f"bg_track_{task_id}.wav"
+        raw_background_path = stems["no_vocals"]
+
+        task_data[task_id]["status"] = {"status": "processing", "step": "Filtering out background music & isolating SFX...", "progress": 25}
+        save_task_to_disk(task_id)
+
+        sfx_isolated_path = extract_sfx_and_remove_bgm(raw_background_path, task_id)
+        background_audio_path = sfx_isolated_path
+
+        public_bg_audio_name = f"sfx_track_{task_id}.wav"
         public_bg_audio_path = os.path.join("output", public_bg_audio_name)
-        if os.path.exists(background_music_path):
+        if os.path.exists(background_audio_path):
             import shutil
-            shutil.copy(background_music_path, public_bg_audio_path)
+            shutil.copy(background_audio_path, public_bg_audio_path)
             task_data[task_id]["public_bg_audio"] = f"/output/{public_bg_audio_name}"
 
         task_data[task_id]["video_path"] = video_path
-        task_data[task_id]["background_audio_path"] = background_music_path
+        task_data[task_id]["background_audio_path"] = background_audio_path
         task_data[task_id]["output_path"] = output_path
         task_data[task_id]["audio_mode"] = output_mode
         task_data[task_id]["add_watermark"] = add_watermark
+        task_data[task_id]["blur_subtitles"] = blur_subtitles
+        task_data[task_id]["banner_bottom_text"] = banner_bottom_text
 
-        # Fast-track for Sound Only Background Mode
         if output_mode == "bg_only":
-            task_data[task_id]["status"] = {"status": "processing", "step": "Exporting Sound Only Background video...", "progress": 75}
+            task_data[task_id]["status"] = {"status": "processing", "step": "Exporting SFX Only video...", "progress": 75}
             save_task_to_disk(task_id)
 
             merge_with_realtime_progress(
                 task_id=task_id,
                 video_path=video_path,
-                background_audio_path=background_music_path,
+                background_audio_path=background_audio_path,
                 audio_segments=[],
                 output_path=output_path,
-                bg_volume=0.7,
+                bg_volume=0.25,
                 voice_volume=0.0,
                 audio_mode="bg_only",
-                add_watermark=add_watermark
+                add_watermark=add_watermark,
+                blur_subtitles=blur_subtitles,
+                banner_bottom_text=banner_bottom_text
             )
 
             task_data[task_id]["status"] = {
-                "status": "completed", 
-                "step": "Background Track Export Complete!", 
+                "status": "completed",
+                "step": "SFX Track Export Complete!",
                 "progress": 100,
                 "output_video": f"/output/{os.path.basename(output_path)}",
                 "output_srt": ""
@@ -774,13 +1136,12 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
             save_task_to_disk(task_id)
             return
 
-        # Voiceover & Subtitle Pipeline
         raw_segments = []
         if subtitle_filename:
             srt_full_path = os.path.join("input", subtitle_filename)
             task_data[task_id]["status"] = {"status": "processing", "step": "Reading provided subtitle file...", "progress": 30}
             save_task_to_disk(task_id)
-            
+
             raw_segments = parse_srt(srt_full_path)
             if not raw_segments:
                 raise ValueError(f"Could not parse valid subtitle segments from: {subtitle_filename}")
@@ -797,17 +1158,17 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
         task_data[task_id]["status"] = {"status": "processing", "step": "Preparing Khmer script & voice modes...", "progress": 45}
         translated_segments = []
         total_segs = len(raw_segments)
-        
+
         for idx, seg in enumerate(raw_segments):
             khmer_text = safe_translate_and_clean(translator, seg["text"], source_lang)
-            
+
             if voice_mode == "force_male":
                 gender = "male"
             elif voice_mode == "force_female":
                 gender = "female"
             else:
                 gender = detect_segment_gender(vocals_path, seg["start"], seg["end"])
-            
+
             translated_segments.append({
                 "start": seg["start"],
                 "end": seg["end"],
@@ -815,11 +1176,11 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
                 "translated_text": khmer_text,
                 "gender": gender
             })
-            
+
             current_progress = 45 + int(((idx + 1) / max(1, total_segs)) * 15)
             task_data[task_id]["status"] = {
-                "status": "processing", 
-                "step": f"Processed Khmer segment {idx + 1} of {total_segs} ({gender.upper()})...", 
+                "status": "processing",
+                "step": f"Processed Khmer segment {idx + 1} of {total_segs} ({gender.upper()})...",
                 "progress": current_progress
             }
             save_task_to_disk(task_id)
@@ -828,21 +1189,22 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
 
         khmer_srt_path = output_path.rsplit(".", 1)[0] + ".srt"
         task_data[task_id]["srt_path"] = khmer_srt_path
-        
+
         srt_lines = []
         for i, seg in enumerate(translated_segments, start=1):
-            start_time = format_time(seg["start"])
-            end_time = format_time(seg["end"])
+            scaled_start = seg["start"] / SPEED_FACTOR
+            scaled_end = seg["end"] / SPEED_FACTOR
+            start_time = format_time(scaled_start)
+            end_time = format_time(scaled_end)
             srt_lines.append(f"{i}\n{start_time} --> {end_time}\n{seg['translated_text']}\n")
-        
+
         with open(khmer_srt_path, "w", encoding="utf-8") as f:
             f.write("\n".join(srt_lines))
 
-        # Subtitle Only Mode
         if output_mode == "subtitle":
             task_data[task_id]["status"] = {
-                "status": "completed", 
-                "step": "Subtitles Generated Successfully!", 
+                "status": "completed",
+                "step": "Subtitles Generated Successfully!",
                 "progress": 100,
                 "output_video": f"/input/{os.path.basename(video_path)}",
                 "output_srt": f"/output/{os.path.basename(khmer_srt_path)}"
@@ -856,41 +1218,43 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
             if seg["translated_text"].strip():
                 seg_audio_path = f"temp_seg_{task_id}_{idx}.mp3"
                 detected_gender = seg.get("gender", "female")
-                
+
                 success = asyncio.run(generate_segment_audio(
-                    seg["translated_text"], 
-                    seg_audio_path, 
+                    seg["translated_text"],
+                    seg_audio_path,
                     gender=detected_gender
                 ))
-                
+
                 if success and os.path.exists(seg_audio_path):
                     audio_segments.append({
                         "path": seg_audio_path,
                         "start": seg["start"],
                         "end": seg["end"]
                     })
-                    
+
             current_progress = 60 + int(((idx + 1) / max(1, total_segs)) * 20)
             task_data[task_id]["status"] = {
-                "status": "processing", 
-                "step": f"Generating Khmer TTS Voiceover {idx + 1} of {total_segs}...", 
+                "status": "processing",
+                "step": f"Generating Khmer TTS Voiceover {idx + 1} of {total_segs}...",
                 "progress": current_progress
             }
             save_task_to_disk(task_id)
 
-        bg_vol = 0.0 if output_mode == "voice_only" else task_data[task_id].get("bg_volume", 0.18)
-        voice_vol = task_data[task_id].get("voice_volume", 1.6)
+        sfx_vol = 0.0 if output_mode == "voice_only" else task_data[task_id].get("bg_volume", 0.0)
+        voice_vol = task_data[task_id].get("voice_volume", 1.8)
 
         merge_with_realtime_progress(
             task_id=task_id,
             video_path=video_path,
-            background_audio_path=background_music_path,
+            background_audio_path=background_audio_path,
             audio_segments=audio_segments,
             output_path=output_path,
-            bg_volume=bg_vol,
+            bg_volume=sfx_vol,
             voice_volume=voice_vol,
             audio_mode=output_mode,
-            add_watermark=add_watermark
+            add_watermark=add_watermark,
+            blur_subtitles=blur_subtitles,
+            banner_bottom_text=banner_bottom_text
         )
 
         for seg in audio_segments:
@@ -901,8 +1265,8 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
                     pass
 
         task_data[task_id]["status"] = {
-            "status": "completed", 
-            "step": "Dubbing Complete!", 
+            "status": "completed",
+            "step": "Anti-Copyright Dubbing Complete!",
             "progress": 100,
             "output_video": f"/output/{os.path.basename(output_path)}",
             "output_srt": f"/output/{os.path.basename(khmer_srt_path)}"
@@ -914,9 +1278,6 @@ def run_dubbing_pipeline(task_id: str, video_path: str, source_lang: str, output
         task_data[task_id]["status"] = {"status": "failed", "step": str(e), "progress": 0}
         save_task_to_disk(task_id)
 
-# ==========================================
-# 🌟 NEW: MERGE MULTIPLE TRANSLATED VIDEOS
-# ==========================================
 class MergeVideosRequest(BaseModel):
     task_ids: List[str]
     custom_title: Optional[str] = "full_merged_movie"
@@ -931,10 +1292,9 @@ async def merge_completed_videos(req: MergeVideosRequest):
         tdata = load_task_from_disk(tid)
         if not tdata:
             raise HTTPException(status_code=404, detail=f"Task record not found for ID: {tid}")
-        
+
         out_path = tdata.get("output_path")
         if not out_path or not os.path.exists(out_path):
-            # Try to resolve directly inside output folder
             candidate = os.path.join("output", f"dubbed_{tid}_{sanitize_filename(tdata.get('filename', ''))}.mp4")
             if os.path.exists(candidate):
                 out_path = candidate
@@ -950,12 +1310,10 @@ async def merge_completed_videos(req: MergeVideosRequest):
     concat_txt_path = os.path.join("output", f"temp_concat_{merge_id}.txt")
     with open(concat_txt_path, "w", encoding="utf-8") as f:
         for vp in resolved_video_paths:
-            # Escape path properly for FFmpeg concat demuxer
             clean_vp = vp.replace("\\", "/").replace("'", "'\\''")
             f.write(f"file '{clean_vp}'\n")
 
     try:
-        # 1. First attempt: Super-fast stream copy concat (zero quality loss)
         cmd_copy = [
             FFMPEG_PATH, "-y",
             "-f", "concat", "-safe", "0",
@@ -966,14 +1324,13 @@ async def merge_completed_videos(req: MergeVideosRequest):
         ]
         res = subprocess.run(cmd_copy, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-        # 2. Fallback: If copy fails due to minor parameter difference, re-encode seamlessly
         if res.returncode != 0 or not os.path.exists(merged_output_path) or os.path.getsize(merged_output_path) < 1000:
             input_args = []
             filter_inputs = []
             for i, vp in enumerate(resolved_video_paths):
                 input_args.extend(["-i", vp])
                 filter_inputs.append(f"[{i}:v:0][{i}:a:0]")
-            
+
             filter_complex_str = f"{''.join(filter_inputs)}concat=n={len(resolved_video_paths)}:v=1:a=1[outv][outa]"
             cmd_reencode = [
                 FFMPEG_PATH, "-y",
@@ -986,10 +1343,10 @@ async def merge_completed_videos(req: MergeVideosRequest):
                 merged_output_path
             ]
             res_fb = subprocess.run(cmd_reencode, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if res_fb.returncode != 0 or not os.path.exists(merged_output_path):
-                raise RuntimeError(f"FFmpeg video merge failed: {res_fb.stderr[:200]}")
+            if res_fb.returncode != 0:
+                fb_error = res_fb.stderr[-500:] if res_fb.stderr else "Unknown error"
+                raise RuntimeError(f"FFmpeg video merge failed: {fb_error}")
 
-        # Register merged full movie into history
         task_data[merge_id] = {
             "task_id": merge_id,
             "filename": f"Full Merged: {clean_title}",
@@ -1002,10 +1359,11 @@ async def merge_completed_videos(req: MergeVideosRequest):
             },
             "output_path": merged_output_path,
             "segments": [],
-            "bg_volume": 0.18,
-            "voice_volume": 1.6,
+            "bg_volume": 0.0,
+            "voice_volume": 1.8,
             "audio_mode": "both",
             "add_watermark": False,
+            "blur_subtitles": False,
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
         }
         save_task_to_disk(merge_id)
@@ -1080,17 +1438,17 @@ async def trim_clip(req: TrimClipRequest):
     src_path = os.path.join("input", req.filename)
     if not os.path.exists(src_path):
         raise HTTPException(status_code=404, detail="Source file not found.")
-    
+
     clip_id = str(os.urandom(4).hex())
     base_name, ext = os.path.splitext(req.filename)
     clean_base = sanitize_filename(base_name)
     clip_filename = f"clip_{clip_id}_{clean_base}{ext}"
     clip_path = os.path.join("input", clip_filename)
-    
+
     duration = req.end - req.start
     if duration <= 0:
         raise HTTPException(status_code=400, detail="Invalid start and end times.")
-    
+
     cmd = [
         FFMPEG_PATH, "-y", "-ss", str(req.start), "-i", src_path,
         "-t", str(duration), "-c:v", "copy", "-c:a", "copy", "-movflags", "+faststart", clip_path
@@ -1129,16 +1487,18 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
         voice_mode = body.get("voice_mode", "auto")
         pasted_script = body.get("pasted_script")
         add_watermark = bool(body.get("add_watermark", False))
+        blur_subtitles = bool(body.get("blur_subtitles", True))
+        banner_bottom_text = body.get("banner_bottom_text", "ចុច Follow ដើម្បីទស្សនាភាគបន្ត")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}")
-        
+
     if not filename:
         raise HTTPException(status_code=400, detail="Filename is required.")
-        
+
     video_path = os.path.join("input", filename)
     if not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail=f"Video file not found in input folder: {filename}")
-    
+
     task_id = str(os.urandom(4).hex())
     base_name, _ = os.path.splitext(filename)
     safe_name = sanitize_filename(base_name) + ".mp4"
@@ -1154,20 +1514,23 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
         "task_id": task_id,
         "filename": filename,
         "status": {"status": "queued", "step": "In queue...", "progress": 0},
-        "bg_volume": 0.18 if output_mode != "voice_only" else 0.0,
-        "voice_volume": 1.6 if output_mode != "bg_only" else 0.0,
+        "bg_volume": 0.0,
+        "voice_volume": 1.8 if output_mode != "bg_only" else 0.0,
         "audio_mode": output_mode,
         "add_watermark": add_watermark,
+        "blur_subtitles": blur_subtitles,
+        "banner_bottom_text": banner_bottom_text,
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
     }
     save_task_to_disk(task_id)
 
     background_tasks.add_task(
-        run_dubbing_pipeline, 
-        task_id, video_path, source_lang, output_path, filename, 
-        subtitle_filename, output_mode, voice_mode, add_watermark
+        run_dubbing_pipeline,
+        task_id, video_path, source_lang, output_path, filename,
+        subtitle_filename, output_mode, voice_mode, add_watermark, blur_subtitles,
+        banner_bottom_text
     )
-    return {"task_id": task_id, "message": "Khmer video dubbing pipeline started."}
+    return {"task_id": task_id, "message": "Anti-copyright Khmer dubbing started."}
 
 @app.post("/api/upload-preview")
 async def upload_preview(file: UploadFile = File(...)):
@@ -1175,10 +1538,10 @@ async def upload_preview(file: UploadFile = File(...)):
     clean_upload_name = sanitize_filename(file.filename)
     filename = f"{temp_id}_{clean_upload_name}"
     input_path = os.path.join("input", filename)
-    
+
     with open(input_path, "wb") as buffer:
         buffer.write(await file.read())
-        
+
     duration = get_video_duration(input_path) if file.filename.lower().endswith(('.mp4', '.mov', '.mkv', '.avi', '.webm')) else 0.0
     return {
         "success": True,
@@ -1196,11 +1559,11 @@ def ydl_progress_hook(d, download_id):
             percent = float(percent_str)
         except Exception:
             percent = 0.0
-            
+
         download_tasks[download_id] = {
             "status": "downloading",
             "progress": int(percent),
-            "step": f"Downloading 100% source quality stream... ({clean_percent.strip()})"
+            "step": f"Downloading source quality stream... ({clean_percent.strip()})"
         }
     elif d['status'] == 'finished':
         download_tasks[download_id] = {
@@ -1218,7 +1581,7 @@ async def fetch_url_info(req: URLInfoRequest):
         raise HTTPException(status_code=500, detail="yt-dlp is not installed.")
     try:
         cleaned_url = clean_media_url(req.url)
-        
+
         if any(ext in cleaned_url.lower() for ext in [".f4v", ".m3u8", ".mpd", "71edge.com", "googlevideo.com"]):
             return {
                 "success": True,
@@ -1230,17 +1593,17 @@ async def fetch_url_info(req: URLInfoRequest):
         def get_info():
             info, _ = safe_extract_info(cleaned_url, is_download=False, custom_opts={'skip_download': True})
             return info
-        
+
         info = await asyncio.to_thread(get_info)
         title = info.get('title', 'Unknown Video')
-        
+
         subs = list(info.get('subtitles', {}).keys()) if info.get('subtitles') else []
         auto_subs = list(info.get('automatic_captions', {}).keys()) if info.get('automatic_captions') else []
         all_langs = sorted(list(set(subs + auto_subs)))
-        
+
         if not all_langs:
             all_langs = ['en', 'km', 'zh', 'ja', 'ko']
-        
+
         available_res_set = set()
         formats = info.get('formats', []) or []
         for f in formats:
@@ -1253,7 +1616,7 @@ async def fetch_url_info(req: URLInfoRequest):
                         available_res_set.add(min_dim)
 
         quality_options = [{"id": "best", "label": "🌟 Best Source Quality (Auto Max 1080p/4K)"}]
-        
+
         known_labels = {
             2160: "4K (2160x3840 / 3840x2160)",
             1440: "2K (1440x2560 / 2560x1440)",
@@ -1272,7 +1635,7 @@ async def fetch_url_info(req: URLInfoRequest):
                 if abs(res - std_res) <= 40:
                     target_bucket = std_res
                     break
-            
+
             if target_bucket not in added_resolutions:
                 added_resolutions.add(target_bucket)
                 label = known_labels.get(target_bucket, f"{target_bucket}p")
@@ -1372,7 +1735,7 @@ async def background_download_video(download_id: str, url: str, sublang: Optiona
 
         output_template = os.path.join("input", f"{temp_id}_%(title).100B.%(ext)s")
         languages_to_fetch = [sublang] if sublang and sublang.strip() else ['en', 'en-US', 'zh', 'ja', 'ko', 'all']
-        
+
         if quality and quality != "best" and quality.isdigit():
             target_res = int(quality)
             format_sort_rules = [f'res:{target_res}', 'fps', 'codec:vp9:av01:h264', 'size', 'br']
@@ -1399,12 +1762,12 @@ async def background_download_video(download_id: str, url: str, sublang: Optiona
 
         def run_ydl():
             info, ydl_instance = safe_extract_info(
-                cleaned_url, 
-                is_download=True, 
-                custom_opts=custom_opts, 
+                cleaned_url,
+                is_download=True,
+                custom_opts=custom_opts,
                 download_id=download_id
             )
-            
+
             width = info.get('width') or 0
             height = info.get('height') or 0
             fps = info.get('fps') or 0
@@ -1444,7 +1807,7 @@ async def background_download_video(download_id: str, url: str, sublang: Optiona
 async def download_url_preview(background_tasks: BackgroundTasks, req: URLDownloadRequest):
     if not yt_dlp:
         raise HTTPException(status_code=500, detail="yt-dlp is not installed.")
-    
+
     download_id = str(os.urandom(4).hex())
     download_tasks[download_id] = {"status": "queued", "progress": 0, "step": "In queue..."}
     background_tasks.add_task(background_download_video, download_id, req.url, req.sublang, req.quality)
@@ -1488,18 +1851,18 @@ async def get_history():
 async def delete_history_item(task_id: str):
     history_path = os.path.join("history", f"{task_id}.json")
     deleted = False
-    
+
     if os.path.exists(history_path):
         try:
             os.remove(history_path)
             deleted = True
         except Exception as e:
             print(f"⚠️ Warning: Could not delete history file {history_path}: {e}")
-            
+
     if task_id in task_data:
         del task_data[task_id]
         deleted = True
-        
+
     if deleted:
         return {"success": True, "message": "History and data deleted successfully."}
     else:
@@ -1510,17 +1873,19 @@ async def get_editor_data(task_id: str):
     tdata = load_task_from_disk(task_id)
     if not tdata:
         return {"error": "Task not found"}
-    
+
     out_path = tdata.get('output_path', '')
     out_filename = os.path.basename(out_path) if out_path else ''
 
     return {
         "filename": tdata.get("filename", "Project Workspace"),
         "segments": tdata.get("segments", []),
-        "bg_volume": tdata.get("bg_volume", 0.18),
-        "voice_volume": tdata.get("voice_volume", 1.6),
+        "bg_volume": tdata.get("bg_volume", 0.0),
+        "voice_volume": tdata.get("voice_volume", 1.8),
         "audio_mode": tdata.get("audio_mode", "both"),
         "add_watermark": tdata.get("add_watermark", False),
+        "blur_subtitles": tdata.get("blur_subtitles", True),
+        "banner_bottom_text": tdata.get("banner_bottom_text", "ចុច Follow ដើម្បីទស្សនាភាគបន្ត"),
         "output_video": f"/output/{out_filename}",
         "background_audio": tdata.get("public_bg_audio")
     }
@@ -1555,30 +1920,34 @@ async def re_render_task(task_id: str, payload: dict):
     tdata = load_task_from_disk(task_id)
     if not tdata:
         return {"success": False, "error": "Task not found"}
-    
+
     segments = payload.get("segments", [])
-    bg_volume = float(payload.get("bg_volume", 0.18))
-    voice_volume = float(payload.get("voice_volume", 1.6))
+    bg_volume = float(payload.get("bg_volume", 0.0))
+    voice_volume = float(payload.get("voice_volume", 1.8))
     audio_mode = payload.get("audio_mode", "both")
     add_watermark = bool(payload.get("add_watermark", False))
-    
+    blur_subtitles = bool(payload.get("blur_subtitles", True))
+    banner_bottom_text = payload.get("banner_bottom_text", "ចុច Follow ដើម្បីទស្សនាភាគបន្ត")
+
     tdata["bg_volume"] = bg_volume
     tdata["voice_volume"] = voice_volume
     tdata["audio_mode"] = audio_mode
     tdata["add_watermark"] = add_watermark
-    
+    tdata["blur_subtitles"] = blur_subtitles
+    tdata["banner_bottom_text"] = banner_bottom_text
+
     for seg in segments:
         if "translated_text" in seg:
             seg["translated_text"] = clean_khmer_text(seg["translated_text"])
-            
+
     segments = sanitize_segments(segments)
     tdata["segments"] = segments
     save_task_to_disk(task_id)
-    
+
     video_path = tdata.get("video_path")
     background_audio_path = tdata.get("background_audio_path")
     output_path = tdata.get("output_path")
-    
+
     if not video_path or not os.path.exists(video_path):
         return {"success": False, "error": "Original video file not found on disk."}
 
@@ -1607,7 +1976,9 @@ async def re_render_task(task_id: str, payload: dict):
             bg_volume=bg_volume,
             voice_volume=voice_volume,
             audio_mode=audio_mode,
-            add_watermark=add_watermark
+            add_watermark=add_watermark,
+            blur_subtitles=blur_subtitles,
+            banner_bottom_text=banner_bottom_text
         )
 
         for seg in audio_segments:
@@ -1618,7 +1989,7 @@ async def re_render_task(task_id: str, payload: dict):
                     pass
 
         return {
-            "success": True, 
+            "success": True,
             "output_video": f"/output/{os.path.basename(output_path)}"
         }
     except Exception as e:
@@ -1645,7 +2016,7 @@ async def open_folder(req: Optional[OpenFolderRequest] = None):
     output_dir = os.path.abspath("output")
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
-        
+
     filepath = req.filepath if req and req.filepath else None
     target_path = os.path.abspath(filepath) if filepath and os.path.exists(filepath) else output_dir
 
@@ -1664,7 +2035,7 @@ async def open_folder(req: Optional[OpenFolderRequest] = None):
         else:
             folder_path = os.path.dirname(target_path) if os.path.isfile(target_path) else target_path
             subprocess.run(["xdg-open", folder_path])
-            
+
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1694,22 +2065,22 @@ async def auto_split_video(req: AutoSplitRequest):
     src_path = os.path.join("input", req.filename)
     if not os.path.exists(src_path):
         raise HTTPException(status_code=404, detail="Source file not found.")
-    
+
     total_dur = get_video_duration(src_path)
     chunk_duration_sec = req.chunk_minutes * 60.0
     overlap = 3.0
-    
+
     parts_created = 0
     start_time = 0.0
     base_name, ext = os.path.splitext(req.filename)
     clean_base = sanitize_filename(base_name)
-    
+
     matching_srt_path = None
     for f in os.listdir("input"):
         if f.lower().endswith(('.srt', '.vtt')) and (clean_base in f or clean_base[:10] in f):
             matching_srt_path = os.path.join("input", f)
             break
-            
+
     srt_blocks = []
     if matching_srt_path and os.path.exists(matching_srt_path):
         try:
@@ -1753,11 +2124,11 @@ async def auto_split_video(req: AutoSplitRequest):
         while start_time < total_dur:
             end_time = min(start_time + chunk_duration_sec, total_dur)
             actual_duration = end_time - start_time
-            
+
             clip_id = str(os.urandom(3).hex())
             clip_filename = f"part_{parts_created + 1}_{clip_id}_{clean_base}{ext}"
             clip_path = os.path.join("input", clip_filename)
-            
+
             cmd = [
                 FFMPEG_PATH, "-y", "-ss", str(start_time), "-i", src_path,
                 "-t", str(actual_duration), "-c:v", "copy", "-c:a", "copy", "-movflags", "+faststart", clip_path
@@ -1766,10 +2137,10 @@ async def auto_split_video(req: AutoSplitRequest):
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 encoding="utf-8", errors="ignore"
             )
-            
+
             if res.returncode == 0:
                 parts_created += 1
-                
+
                 if srt_blocks:
                     part_srt_filename = f"part_{parts_created}_{clip_id}_{clean_base}.srt"
                     part_srt_path = os.path.join("input", part_srt_filename)
@@ -1790,7 +2161,7 @@ async def auto_split_video(req: AutoSplitRequest):
 
             if end_time >= total_dur:
                 break
-                
+
             start_time = end_time - overlap
 
         return {

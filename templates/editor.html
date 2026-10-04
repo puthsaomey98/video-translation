@@ -35,6 +35,12 @@
                 </select>
             </div>
 
+            <!-- 🌟 BLUR SUBTITLE TOGGLE -->
+            <label class="flex items-center space-x-1.5 bg-slate-950 hover:bg-slate-900 px-2.5 py-1 rounded-lg border border-cyan-500/40 cursor-pointer transition text-xs font-mono text-cyan-300">
+                <input type="checkbox" id="blurSubtitlesToggle" class="accent-cyan-500 rounded" checked>
+                <span>🌫️ Blur Sub</span>
+            </label>
+
             <!-- Animated Watermark Toggle -->
             <label class="flex items-center space-x-1.5 bg-slate-950 hover:bg-slate-900 px-2.5 py-1 rounded-lg border border-amber-500/40 cursor-pointer transition text-xs font-mono text-amber-300">
                 <input type="checkbox" id="watermarkToggle" class="accent-amber-500 rounded">
@@ -59,17 +65,15 @@
         <!-- TOP SECTION: Preview Player & Inspector Panel -->
         <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-hidden">
             
-            <!-- CENTER PREVIEW PANEL (8 Cols) -->
+            <!-- CENTER PREVIEW PANEL -->
             <div class="lg:col-span-8 bg-slate-950 p-4 flex flex-col items-center justify-center relative overflow-hidden">
                 <div class="relative w-full max-w-3xl aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-slate-900 flex items-center justify-center">
                     <video id="videoPreview" controls class="w-full h-full object-contain">
                         Your browser does not support the video tag.
                     </video>
-                    <!-- Background Audio Node for Preview Sync -->
                     <audio id="bgAudioNode" preload="auto"></audio>
                 </div>
                 
-                <!-- Quick Playback Controller Bar -->
                 <div class="mt-3 flex items-center space-x-3">
                     <button onclick="togglePlayPause()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg transition shadow flex items-center space-x-1">
                         <span>▶ Play / Pause</span>
@@ -78,7 +82,7 @@
                 </div>
             </div>
 
-            <!-- RIGHT INSPECTOR & SCRIPTS PANEL (4 Cols) -->
+            <!-- RIGHT INSPECTOR & SCRIPTS PANEL -->
             <div class="lg:col-span-4 bg-slate-900 border-l border-slate-800 flex flex-col h-full overflow-hidden">
                 <div class="p-3.5 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
                     <div class="flex items-center space-x-2">
@@ -87,9 +91,7 @@
                     <span id="segmentCount" class="text-[10px] bg-indigo-950 text-indigo-300 px-2.5 py-0.5 rounded-full border border-indigo-800/50 font-mono">0 Segments</span>
                 </div>
 
-                <!-- Scrollable Script Cards -->
                 <div id="segmentsContainer" class="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
-                    <!-- Injected via JS -->
                 </div>
             </div>
 
@@ -98,7 +100,6 @@
         <!-- BOTTOM MULTITRACK TIMELINE SECTION -->
         <div class="h-64 bg-slate-900 border-t border-slate-800 flex flex-col shrink-0">
             
-            <!-- Timeline Toolbar / Real-time Volume Sliders -->
             <div class="px-4 py-2 border-b border-slate-800 flex justify-between items-center bg-slate-900/90 text-xs">
                 <div class="flex items-center space-x-4">
                     <span class="font-bold text-slate-300 uppercase tracking-wider text-[11px]">⏱️ Multi-Track Timeline</span>
@@ -114,7 +115,6 @@
                     </div>
                 </div>
 
-                <!-- Zoom Controls -->
                 <div class="flex items-center space-x-2">
                     <span class="text-slate-400 font-mono" id="zoomLabel">Zoom: 1.0x</span>
                     <button onclick="setZoom(1.0)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-0.5 rounded font-mono text-[10px]">1x</button>
@@ -124,14 +124,11 @@
                 </div>
             </div>
 
-            <!-- Scrollable Timeline Tracks Canvas -->
             <div id="timelineContainer" class="flex-1 overflow-x-auto overflow-y-hidden relative custom-scrollbar bg-slate-950 p-2 cursor-pointer">
                 <div id="timelineAxis" class="relative h-36 bg-slate-900/60 rounded-xl border border-slate-800/80" style="width: 100%; min-width: 1400px;">
-                    <!-- Moving Playhead Line Indicator -->
                     <div id="playhead" class="absolute top-0 bottom-0 w-0.5 bg-red-500 z-30 pointer-events-none" style="left: 0%;">
                         <div class="w-3 h-3 bg-red-500 rounded-full -ml-[5px] -mt-1 shadow-md"></div>
                     </div>
-                    <!-- Track Lanes injected via JS -->
                 </div>
             </div>
 
@@ -189,20 +186,6 @@
                 const safeVideoUrl = getSafeMediaUrl(data.output_video);
                 videoEl.src = safeVideoUrl;
                 videoEl.load();
-
-                videoEl.onerror = () => {
-                    const err = videoEl.error;
-                    let errMsg = "Unknown error";
-                    if (err) {
-                        switch (err.code) {
-                            case 1: errMsg = "Aborted by user"; break;
-                            case 2: errMsg = "Network error / File not found (404)"; break;
-                            case 3: errMsg = "Decode error (Corrupted file)"; break;
-                            case 4: errMsg = "Source format/codec not supported or file missing"; break;
-                        }
-                    }
-                    console.error(`❌ HTML5 Video Error [Code ${err ? err.code : '?' }]: ${errMsg}`);
-                };
 
                 if (data.background_audio) {
                     bgAudioEl.src = getSafeMediaUrl(data.background_audio);
@@ -263,6 +246,10 @@
 
                 if (data.add_watermark !== undefined) {
                     document.getElementById('watermarkToggle').checked = Boolean(data.add_watermark);
+                }
+
+                if (data.blur_subtitles !== undefined) {
+                    document.getElementById('blurSubtitlesToggle').checked = Boolean(data.blur_subtitles);
                 }
 
             } catch (err) {
@@ -621,13 +608,15 @@
 
             const presetMode = document.getElementById('audioModePreset').value;
             const addWatermark = document.getElementById('watermarkToggle').checked;
+            const blurSubtitles = document.getElementById('blurSubtitlesToggle').checked;
 
             const payload = {
                 segments: currentData.segments,
                 bg_volume: parseFloat(document.getElementById('bgVolume').value),
                 voice_volume: parseFloat(document.getElementById('voiceVolume').value),
                 audio_mode: presetMode,
-                add_watermark: addWatermark
+                add_watermark: addWatermark,
+                blur_subtitles: blurSubtitles
             };
 
             const statusCard = document.getElementById('statusCard');
@@ -638,7 +627,7 @@
             statusCard.classList.remove('hidden');
             downloadContainer.classList.add('hidden');
             renderBtn.disabled = true;
-            statusText.innerText = "⏳ Compiling final Khmer dubbing export... Please wait.";
+            statusText.innerText = "⏳ Compiling final export (Applying Subtitle Blur & Anti-Hash)...";
 
             try {
                 const res = await fetch(`/api/re-render/${taskId}`, {
