@@ -15,4 +15,4 @@
 *.wav
 *.json
 cookies.txt
-*/*.srt
+*.srt
