@@ -94,54 +94,6 @@ def get_random_safe_bgm() -> Optional[str]:
     bgm_files = [os.path.join("safe_bgm", f) for f in os.listdir("safe_bgm") if f.lower().endswith(valid_exts)]
     return random.choice(bgm_files) if bgm_files else None
 
-def extract_sfx_and_remove_bgm(input_audio_path: str, task_id: str) -> str:
-    output_sfx_path = os.path.join("temp_separated", f"sfx_only_{task_id}.wav")
-    try:
-        import librosa
-        try:
-            import soundfile as sf
-        except ImportError:
-            sf = None
-
-        y, sr = librosa.load(input_audio_path, sr=24000, mono=True)
-        _, y_percussive = librosa.effects.hpss(y, margin=(1.0, 3.0))
-
-        if sf:
-            sf.write(output_sfx_path, y_percussive, sr)
-        else:
-            from scipy.io import wavfile
-            wavfile.write(output_sfx_path, sr, (y_percussive * 32767).astype(np.int16))
-
-        if os.path.exists(output_sfx_path) and os.path.getsize(output_sfx_path) > 1000:
-            filtered_sfx_path = os.path.join("temp_separated", f"sfx_filtered_{task_id}.wav")
-            filter_str = "highpass=f=200,lowpass=f=7200,agate=range=-40dB:threshold=0.08:attack=2:release=90"
-            cmd_filter = [FFMPEG_PATH, "-y", "-i", output_sfx_path, "-filter:a", filter_str, filtered_sfx_path]
-            res_f = subprocess.run(cmd_filter, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if res_f.returncode == 0 and os.path.exists(filtered_sfx_path):
-                return filtered_sfx_path
-            return output_sfx_path
-    except Exception:
-        pass
-
-    try:
-        filter_str = (
-            "highpass=f=220,lowpass=f=7500,"
-            "agate=range=-40dB:threshold=0.08:attack=2:release=90,"
-            "alimiter=limit=0.9"
-        )
-        cmd = [
-            FFMPEG_PATH, "-y", "-i", input_audio_path,
-            "-filter:a", filter_str,
-            output_sfx_path
-        ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if res.returncode == 0 and os.path.exists(output_sfx_path):
-            return output_sfx_path
-    except Exception:
-        pass
-
-    return input_audio_path
-
 def is_khmer_text(text: str) -> bool:
     if not text:
         return False
@@ -303,7 +255,6 @@ def safe_translate_and_clean(translator, text: str, source_lang: str) -> str:
     if not text or not text.strip():
         return ""
 
-    # If already Khmer or source_lang is 'km', do not translate through Google Translate
     if source_lang == "km" or is_khmer_text(text):
         return clean_khmer_text(text)
 
@@ -352,33 +303,6 @@ def process_pasted_script_to_srt(pasted_text: str, video_path: str, output_srt_p
         f.write("\n".join(srt_lines))
 
     return True
-
-def detect_segment_gender(vocals_path: Optional[str], start_sec: float, end_sec: float) -> str:
-    if not vocals_path or not os.path.exists(vocals_path):
-        return "female"
-
-    try:
-        import librosa
-        duration = max(0.4, end_sec - start_sec)
-        y, sr = librosa.load(vocals_path, sr=16000, offset=start_sec, duration=duration)
-
-        if len(y) == 0 or np.max(np.abs(y)) < 0.01:
-            return "female"
-
-        f0, voiced_flag, _ = librosa.pyin(
-            y,
-            fmin=librosa.note_to_hz('C2'),
-            fmax=librosa.note_to_hz('C6'),
-            sr=sr
-        )
-        voiced_f0 = f0[voiced_flag & ~np.isnan(f0)]
-        if len(voiced_f0) > 0:
-            median_f0 = float(np.median(voiced_f0))
-            return "female" if median_f0 > 145.0 else "male"
-    except Exception:
-        pass
-
-    return "female"
 
 def fit_and_normalize_audio_segment(input_audio_path: str, target_duration: float, output_audio_path: str):
     try:
@@ -437,8 +361,8 @@ async def batch_generate_tts_segments(
     base_progress: int = 60,
     progress_range: int = 20
 ) -> list:
-    """Generates TTS audio segments reliably by queueing requests to avoid Edge-TTS WebSocket drops."""
-    semaphore = asyncio.Semaphore(1)  # Single connection prevents 'No audio was received'
+    """Generates TTS audio segments with a single connection queue to prevent Edge-TTS packet loss."""
+    semaphore = asyncio.Semaphore(1)
     total = len(segments)
     completed_count = 0
     audio_segments = []
@@ -452,7 +376,7 @@ async def batch_generate_tts_segments(
 
         seg_audio_path = f"temp_seg_{task_id}_{idx}.mp3"
         async with semaphore:
-            await asyncio.sleep(0.15)  # Safe delay between Edge-TTS WebSocket handshakes
+            await asyncio.sleep(0.12)
             success = await generate_segment_audio(text, seg_audio_path, gender=gender)
 
         completed_count += 1
@@ -475,14 +399,15 @@ async def batch_generate_tts_segments(
     tasks = [process_seg(idx, seg) for idx, seg in enumerate(segments)]
     results = await asyncio.gather(*tasks)
     return [r for r in results if r is not None]
+
 def merge_with_realtime_progress(
     task_id: str,
     video_path: str,
     background_audio_path: Optional[str],
     audio_segments: list,
     output_path: str,
-    bg_volume: float = 0.35,
-    voice_volume: float = 1.8,
+    bg_volume: float = 0.50,       # Default: 50% original background sound & effects
+    voice_volume: float = 1.8,     # Clear voice volume
     audio_mode: str = "bgm_sfx_voice",
     add_watermark: bool = False,
     blur_subtitles: bool = False
@@ -497,7 +422,7 @@ def merge_with_realtime_progress(
     try:
         task_data[task_id]["status"] = {
             "status": "processing",
-            "step": "Mixing requested audio tracks (Voice/SFX/BGM)...",
+            "step": "Mixing audio tracks (Voice + 50% Original SFX + Music)...",
             "progress": 82
         }
         save_task_to_disk(task_id)
@@ -509,30 +434,28 @@ def merge_with_realtime_progress(
 
         mode = str(audio_mode).lower().strip()
 
-        # Exact 4 Audio Combinations:
-        # 1. bgm_sfx_voice : Music (BGM) + Sound Effect (SFX) + Khmer Voice
-        # 2. sfx_voice     : Sound Effect (SFX) + Khmer Voice
-        # 3. bgm_voice     : Music (BGM) + Khmer Voice
-        # 4. voice_only    : Only Khmer Voice
+        # The 4 explicit sound combinations
         include_sfx = mode in ["bgm_sfx_voice", "sfx_voice", "both", "all", "bg_and_voice", "bg_only"]
         include_bgm = mode in ["bgm_sfx_voice", "bgm_voice", "both", "all"]
         include_voice = mode in ["bgm_sfx_voice", "sfx_voice", "bgm_voice", "voice_only", "both", "bg_and_voice"]
 
-        effective_sfx_vol = bg_volume if bg_volume > 0.0 else 0.35
-        effective_voice_vol = voice_volume if voice_volume > 0.0 else 1.8
-        effective_bgm_vol = 0.18
+        # Ensure original movie effects and background sound play at 50%
+        effective_sfx_vol = float(bg_volume) if bg_volume > 0.0 else 0.50
+        effective_voice_vol = float(voice_volume) if voice_volume > 0.0 else 1.8
+        effective_bgm_vol = 0.16  # Subtle royalty-free backing music to avoid masking effects
 
-        # 1. Background Movie Sound Effects (SFX)
+        # 1. Original Movie Sound Effects & Background Audio (Demucs no_vocals stem at 50%)
         if include_sfx and background_audio_path and os.path.exists(background_audio_path):
             try:
                 sfx_clip = AudioFileClip(background_audio_path)
                 sfx_clip = apply_clip_volume(sfx_clip, effective_sfx_vol)
                 sfx_clip = apply_clip_duration(sfx_clip, total_duration)
                 audio_clips.append(sfx_clip)
+                print(f"✅ Added original background/SFX track at {effective_sfx_vol * 100:.0f}% volume.")
             except Exception as e:
                 print(f"⚠️ Warning loading SFX clip: {e}")
 
-        # 2. Royalty-Free Safe BGM (Music)
+        # 2. Safe Royalty-Free BGM (Light layer)
         if include_bgm:
             safe_bgm_track = get_random_safe_bgm()
             if safe_bgm_track and os.path.exists(safe_bgm_track):
@@ -597,7 +520,7 @@ def merge_with_realtime_progress(
             except Exception:
                 pass
 
-        # 4. Video Rendering (NO hflip / NO Reversing, Optimized Color Grading)
+        # 4. Video Rendering (NO REVERSING / NO hflip)
         task_data[task_id]["status"] = {
             "status": "processing",
             "step": "Rendering Fullscreen Video & Muxing Master Audio...",
@@ -616,7 +539,7 @@ def merge_with_realtime_progress(
         vw = (int(vw) // 2) * 2
         vh = (int(vh) // 2) * 2
 
-        # Fast filter without heavy noise and WITHOUT hflip (preserves original video direction)
+        # Fast filter chain without hflip
         filter_parts = [
             f"[0:v]scale={vw}:{vh},"
             f"eq=contrast=1.06:brightness=0.01:saturation=1.08:gamma=0.99,"
@@ -624,7 +547,6 @@ def merge_with_realtime_progress(
         ]
         current_v = "[v_base]"
 
-        # Optional subtitle blur box at the lower 14% of the frame
         if blur_subtitles:
             blur_h = max(20, int(vh * 0.14))
             blur_y = max(0, int(vh * 0.82))
@@ -635,7 +557,6 @@ def merge_with_realtime_progress(
             )
             current_v = "[v_blurred]"
 
-        # Optional Watermark Logo
         logo_w = 80
         logo_path = get_logo_path()
         has_logo = bool(add_watermark and logo_path and os.path.exists(logo_path))
@@ -781,7 +702,7 @@ def run_dubbing_pipeline(
     filename: str,
     subtitle_filename: Optional[str] = None,
     output_mode: str = "bgm_sfx_voice",
-    voice_mode: str = "auto",
+    voice_mode: str = "male",
     add_watermark: bool = False,
     blur_subtitles: bool = False
 ):
@@ -794,9 +715,9 @@ def run_dubbing_pipeline(
         vocals_path = None
         background_audio_path = None
 
-        # PERFORMANCE BOOST: Skip Demucs if no SFX and no STT are needed
+        # Isolate tracks via Demucs when SFX or Whisper STT are required
         if needs_sfx or needs_stt:
-            task_data[task_id]["status"] = {"status": "processing", "step": "Separating audio tracks...", "progress": 15}
+            task_data[task_id]["status"] = {"status": "processing", "step": "Separating movie audio tracks...", "progress": 15}
             save_task_to_disk(task_id)
 
             stems = extract_and_separate_audio(video_path, output_dir="./temp_separated")
@@ -804,16 +725,15 @@ def run_dubbing_pipeline(
             raw_background_path = stems["no_vocals"]
 
             if needs_sfx:
-                task_data[task_id]["status"] = {"status": "processing", "step": "Isolating movie sound effects (SFX)...", "progress": 25}
-                save_task_to_disk(task_id)
-                background_audio_path = extract_sfx_and_remove_bgm(raw_background_path, task_id)
+                # Use the clean, un-gated Demucs background track directly (all effects preserved)
+                background_audio_path = raw_background_path
                 public_bg_audio_name = f"sfx_track_{task_id}.wav"
                 public_bg_audio_path = os.path.join("output", public_bg_audio_name)
                 if os.path.exists(background_audio_path):
                     shutil.copy(background_audio_path, public_bg_audio_path)
                     task_data[task_id]["public_bg_audio"] = f"/output/{public_bg_audio_name}"
         else:
-            task_data[task_id]["status"] = {"status": "processing", "step": "Direct Dubbing Mode: Skipping Demucs separation...", "progress": 25}
+            task_data[task_id]["status"] = {"status": "processing", "step": "Voice-Only Mode: Fast pipeline active...", "progress": 25}
             save_task_to_disk(task_id)
 
         task_data[task_id]["video_path"] = video_path
@@ -826,49 +746,34 @@ def run_dubbing_pipeline(
         raw_segments = []
         if subtitle_filename:
             srt_full_path = os.path.join("input", subtitle_filename)
-            task_data[task_id]["status"] = {"status": "processing", "step": "Reading Khmer subtitle script...", "progress": 30}
+            task_data[task_id]["status"] = {"status": "processing", "step": "Loading Khmer subtitles...", "progress": 30}
             save_task_to_disk(task_id)
             raw_segments = parse_srt(srt_full_path)
             if not raw_segments:
                 raise ValueError(f"Could not parse valid subtitle segments from: {subtitle_filename}")
         else:
-            task_data[task_id]["status"] = {"status": "processing", "step": "Running Speech-to-Text on isolated vocals...", "progress": 30}
+            task_data[task_id]["status"] = {"status": "processing", "step": "Transcribing speech from audio...", "progress": 30}
             save_task_to_disk(task_id)
             raw_segments = transcribe_isolated_vocals(vocals_path, source_lang=source_lang)
             if not raw_segments:
-                raise ValueError("No speech segments detected in video audio track.")
+                raise ValueError("No speech detected in video track.")
 
         raw_segments = sanitize_segments(raw_segments)
 
         task_data[task_id]["status"] = {"status": "processing", "step": "Preparing Khmer script & voice settings...", "progress": 45}
         translated_segments = []
-        total_segs = len(raw_segments)
 
         vm = str(voice_mode).lower().strip()
-        if "female" in vm:
-            fixed_gender = "female"
-        elif "male" in vm:
-            fixed_gender = "male"
-        elif vm == "auto" and vocals_path:
-            fixed_gender = None  # Use auto-detection
-        else:
-            fixed_gender = "male"  # Default fallback
+        fixed_gender = "female" if "female" in vm else "male"
 
         for idx, seg in enumerate(raw_segments):
             khmer_text = safe_translate_and_clean(translator, seg["text"], source_lang)
-            
-            # Apply user-selected voice or auto fallback
-            if fixed_gender:
-                gender = fixed_gender
-            else:
-                gender = detect_segment_gender(vocals_path, seg["start"], seg["end"])
-
             translated_segments.append({
                 "start": seg["start"],
                 "end": seg["end"],
                 "source_text": seg["text"],
                 "translated_text": khmer_text,
-                "gender": gender
+                "gender": fixed_gender
             })
 
         task_data[task_id]["segments"] = translated_segments
@@ -896,15 +801,14 @@ def run_dubbing_pipeline(
             save_task_to_disk(task_id)
             return
 
-        # Parallel Edge-TTS Batch Generation
-        task_data[task_id]["status"] = {"status": "processing", "step": "Batch-generating Khmer neural speech...", "progress": 60}
+        task_data[task_id]["status"] = {"status": "processing", "step": "Generating Khmer neural speech...", "progress": 60}
         save_task_to_disk(task_id)
 
         audio_segments = asyncio.run(
             batch_generate_tts_segments(task_id, translated_segments, task_data[task_id], base_progress=60, progress_range=20)
         )
 
-        sfx_vol = task_data[task_id].get("bg_volume", 0.35)
+        sfx_vol = task_data[task_id].get("bg_volume", 0.50)
         voice_vol = task_data[task_id].get("voice_volume", 1.8)
 
         merge_with_realtime_progress(
@@ -949,7 +853,7 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
         source_lang = body.get("source_lang", "km")
         subtitle_filename = body.get("subtitle_filename")
         output_mode = body.get("output_mode", "bgm_sfx_voice")
-        voice_mode = body.get("voice_mode", "auto")
+        voice_mode = body.get("voice_mode", "male")
         pasted_script = body.get("pasted_script")
         add_watermark = bool(body.get("add_watermark", False))
         blur_subtitles = bool(body.get("blur_subtitles", False))
@@ -978,7 +882,7 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
         "task_id": task_id,
         "filename": filename,
         "status": {"status": "queued", "step": "In queue...", "progress": 0},
-        "bg_volume": 0.35,
+        "bg_volume": 0.50,            # 50% default volume for sound effects & background
         "voice_volume": 1.8,
         "audio_mode": output_mode,
         "add_watermark": add_watermark,
@@ -1001,7 +905,7 @@ async def re_render_task(task_id: str, payload: dict):
         return {"success": False, "error": "Task not found"}
 
     segments = payload.get("segments", [])
-    bg_volume = float(payload.get("bg_volume", 0.35))
+    bg_volume = float(payload.get("bg_volume", 0.50))
     voice_volume = float(payload.get("voice_volume", 1.8))
     audio_mode = payload.get("audio_mode", "bgm_sfx_voice")
     add_watermark = bool(payload.get("add_watermark", False))
@@ -1212,7 +1116,7 @@ async def get_editor_data(task_id: str):
     return {
         "filename": tdata.get("filename", "Project Workspace"),
         "segments": tdata.get("segments", []),
-        "bg_volume": tdata.get("bg_volume", 0.35),
+        "bg_volume": tdata.get("bg_volume", 0.50),
         "voice_volume": tdata.get("voice_volume", 1.8),
         "audio_mode": tdata.get("audio_mode", "bgm_sfx_voice"),
         "add_watermark": tdata.get("add_watermark", False),
@@ -1226,7 +1130,7 @@ class SegmentItem(BaseModel):
     end: float
     source_text: str = ""
     translated_text: str
-    gender: str = "female"
+    gender: str = "male"
 
 @app.post("/api/test-segment/{task_id}/{index}")
 async def test_single_segment(task_id: str, index: int, req: SegmentItem):
