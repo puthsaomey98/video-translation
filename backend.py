@@ -69,211 +69,6 @@ ZH_TYPO_MAP = {
     "进房炮": "近防炮",
 }
 
-def find_headless_browser() -> Optional[str]:
-    """Finds Microsoft Edge or Google Chrome to render HarfBuzz Khmer shaping."""
-    win_paths = [
-        os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "Microsoft", "Edge", "Application", "msedge.exe"),
-        os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "Microsoft", "Edge", "Application", "msedge.exe"),
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "Application", "msedge.exe"),
-        os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "Google", "Chrome", "Application", "chrome.exe"),
-        os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "Google", "Chrome", "Application", "chrome.exe"),
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
-    ]
-    for p in win_paths:
-        if os.path.exists(p):
-            return p
-    for name in ["msedge", "chrome", "google-chrome", "chromium"]:
-        w = shutil.which(name)
-        if w:
-            return w
-    return None
-
-def get_font_file_path() -> Optional[str]:
-    """Finds the path to KhmerFont.ttf or standard Windows Khmer fonts."""
-    candidate_paths = [
-        os.path.join("fonts", "KhmerFont.ttf"),
-        "KhmerFont.ttf",
-        os.path.join(os.getcwd(), "fonts", "KhmerFont.ttf"),
-        os.path.join(os.getcwd(), "KhmerFont.ttf"),
-        os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "LeelawUI.ttf"),
-        os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "LeelaUIb.ttf"),
-        os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "KhmerUI.ttf")
-    ]
-    for p in candidate_paths:
-        if os.path.exists(p) and os.path.getsize(p) > 2000:
-            return os.path.abspath(p)
-    return None
-
-def create_recap_banner(vw: int, vh: int, banner_text: str, output_path: str) -> Optional[str]:
-    """
-    Renders 100% grammatically correct Khmer script (stacked subscripts & vowels)
-    at the top banner on a single line.
-    """
-    top_bar_h = int(vh * 0.13)
-    # Scale font size based on width and height to strictly fit within one line
-    font_size = max(18, min(int(top_bar_h * 0.32), int(vw * 0.038)))
-
-    browser_path = find_headless_browser()
-    font_path = get_font_file_path()
-
-    font_face_css = ""
-    if font_path and os.path.exists(font_path):
-        try:
-            with open(font_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("utf-8")
-            font_face_css = f"""
-            @font-face {{
-                font-family: 'LocalKhmer';
-                src: url('data:font/truetype;charset=utf-8;base64,{b64}') format('truetype');
-                font-weight: bold;
-            }}
-            """
-        except Exception as e:
-            print(f"⚠️ Font embedding warning: {e}")
-
-    # 1. Primary Engine: Headless Browser for Perfect Khmer Typography
-    if browser_path:
-        temp_html_path = output_path.replace(".png", ".html")
-        html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@700&family=Noto+Sans+Khmer:wght@700&display=swap');
-{font_face_css}
-* {{
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-}}
-body {{
-    width: {vw}px;
-    height: {vh}px;
-    background-color: transparent;
-    overflow: hidden;
-    font-family: 'LocalKhmer', 'Kantumruy Pro', 'Noto Sans Khmer', 'Leelawadee UI', 'Khmer OS Siemreap', 'Khmer OS', sans-serif;
-}}
-.top-bar {{
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: {vw}px;
-    height: {top_bar_h}px;
-    background-color: #0c0c10;
-    border-bottom: 3.5px solid #ffd700;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    padding: 0 16px;
-}}
-.top-title {{
-    color: #ffffff;
-    font-size: {font_size}px;
-    font-weight: bold;
-    text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.95);
-    line-height: 1.3;
-    white-space: nowrap;
-}}
-</style>
-</head>
-<body>
-    <div class="top-bar">
-        <div class="top-title">{banner_text}</div>
-    </div>
-</body>
-</html>"""
-        try:
-            with open(temp_html_path, "w", encoding="utf-8") as f:
-                f.write(html_content)
-
-            file_url = f"file:///{os.path.abspath(temp_html_path).replace(os.sep, '/')}"
-            cmd = [
-                browser_path,
-                "--headless=new",
-                "--disable-gpu",
-                "--no-sandbox",
-                f"--window-size={vw},{vh}",
-                "--force-device-scale-factor=1",
-                "--default-background-color=00000000",
-                "--hide-scrollbars",
-                f"--screenshot={os.path.abspath(output_path)}",
-                file_url
-            ]
-            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=12)
-
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
-                with Image.open(output_path) as im:
-                    if im.size != (vw, vh):
-                        im = im.resize((vw, vh), Image.Resampling.LANCZOS)
-                        im.save(output_path, "PNG")
-                return output_path
-        except Exception as e:
-            print(f"⚠️ Headless browser render failed: {e}")
-        finally:
-            if os.path.exists(temp_html_path):
-                try:
-                    os.remove(temp_html_path)
-                except Exception:
-                    pass
-
-    # 2. Secondary Engine: FFmpeg ASS Subtitle (Native HarfBuzz)
-    try:
-        temp_ass = output_path.replace(".png", ".ass")
-        top_font_size = max(18, min(int(vh * 0.025), int(vw * 0.038)))
-        top_margin = int(vh * 0.045)
-
-        ass_content = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: {vw}
-PlayResY: {vh}
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: TopStyle,KhmerFont,{top_font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,2,8,15,15,{top_margin},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,0:00:05.00,TopStyle,,0,0,0,,{banner_text}
-"""
-        with open(temp_ass, "w", encoding="utf-8") as f:
-            f.write(ass_content)
-
-        clean_ass = os.path.abspath(temp_ass).replace("\\", "/").replace(":", "\\:")
-        filter_str = (
-            f"drawbox=x=0:y=0:w={vw}:h={top_bar_h}:color=0x0c0c10@1.0:t=fill,"
-            f"drawbox=x=0:y={top_bar_h - 3}:w={vw}:h=3:color=0xffd700@1.0:t=fill,"
-            f"subtitles={clean_ass}:fontsdir=fonts"
-        )
-        cmd = [
-            FFMPEG_PATH, "-y",
-            "-f", "lavfi", "-i", f"color=c=black@0.0:s={vw}x{vh}:d=1",
-            "-vf", filter_str,
-            "-frames:v", "1",
-            output_path
-        ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if os.path.exists(temp_ass):
-            try:
-                os.remove(temp_ass)
-            except Exception:
-                pass
-        if res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
-            return output_path
-    except Exception as e:
-        print(f"⚠️ FFmpeg ASS banner fallback error: {e}")
-
-    # 3. Tertiary Fallback: Pillow basic banner box
-    try:
-        img = Image.new("RGBA", (vw, vh), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        draw.rectangle([0, 0, vw, top_bar_h], fill=(12, 12, 16, 255))
-        draw.line([0, top_bar_h - 3, vw, top_bar_h - 3], fill=(255, 215, 0, 240), width=3)
-        img.save(output_path, "PNG")
-        return output_path
-    except Exception:
-        return None
-
 def get_logo_path() -> Optional[str]:
     possible_names = [
         "logo.png", "logo.jpg", "logo.jpeg", "logo.webp",
@@ -702,13 +497,10 @@ def merge_with_realtime_progress(
     bg_volume: float = 0.0,
     voice_volume: float = 1.8,
     audio_mode: str = "both",
-    add_watermark: bool = False,
-    blur_subtitles: bool = False,
-    banner_bottom_text: str = "ចុច Follow ដើម្បីទស្សនាភាគបន្ត"
+    add_watermark: bool = False
 ):
     fitted_temp_files = []
     temp_mixed_audio = f"temp_mixed_audio_{task_id}.wav"
-    temp_banner_path = f"temp_banner_{task_id}.png"
     audio_clips = []
 
     speed_factor = globals().get("SPEED_FACTOR", 1.045)
@@ -738,7 +530,7 @@ def merge_with_realtime_progress(
             except Exception as e:
                 print(f"⚠️ Warning loading SFX clip: {e}")
 
-        # 2. Safe Royalty-Free BGM Layering
+        # 2. Safe Royalty-Free BGM Layering (Content ID bypass)
         safe_bgm_track = get_random_safe_bgm()
         if safe_bgm_track and os.path.exists(safe_bgm_track):
             try:
@@ -769,8 +561,14 @@ def merge_with_realtime_progress(
                     v_clip = apply_clip_volume(v_clip, voice_volume)
                     audio_clips.append(v_clip)
 
+        # Fallback: if no audio tracks exist, supply background SFX to avoid crashing MoviePy
         if not audio_clips:
-            raise RuntimeError("❌ No audio tracks selected for mixing.")
+            if background_audio_path and os.path.exists(background_audio_path):
+                sfx_clip = AudioFileClip(background_audio_path)
+                sfx_clip = apply_clip_duration(sfx_clip, total_duration)
+                audio_clips.append(sfx_clip)
+            else:
+                raise RuntimeError("❌ No audio tracks selected for mixing.")
 
         final_audio = apply_clip_duration(CompositeAudioClip(audio_clips), total_duration)
 
@@ -796,10 +594,10 @@ def merge_with_realtime_progress(
             except Exception:
                 pass
 
-        # 4. Anti-Copyright Visual Canvas & Recap Banner Filters
+        # 4. 100% Fullscreen Video with Anti-Copyright Filters (No Top Banner, No Canvas Shrink)
         task_data[task_id]["status"] = {
             "status": "processing",
-            "step": "Rendering Title Banner & Anti-Fingerprint Canvas...",
+            "step": "Rendering Fullscreen Video & Anti-Copyright Engine...",
             "progress": 94
         }
         save_task_to_disk(task_id)
@@ -815,57 +613,13 @@ def merge_with_realtime_progress(
         vw = (int(vw) // 2) * 2
         vh = (int(vh) // 2) * 2
 
-        # Generate recap banner with correct single-line Khmer typography
-        banner_file = create_recap_banner(vw, vh, banner_bottom_text, temp_banner_path)
-
-        # Subtitle blur bounding box
-        if is_vertical:
-            sub_w = (int(vw * 0.80) // 2) * 2
-            sub_h = (int(vh * 0.068) // 2) * 2
-            sub_x = (int((vw - sub_w) / 2) // 2) * 2
-            sub_y = (int(vh * 0.70) // 2) * 2
-        else:
-            sub_w = (int(vw * 0.75) // 2) * 2
-            sub_h = (int(vh * 0.075) // 2) * 2
-            sub_x = (int((vw - sub_w) / 2) // 2) * 2
-            sub_y = (int(vh * 0.81) // 2) * 2
-
-        # Scale centered drama clip to 72% height to leave clear margins for banner
-        scale_ratio = 0.72 if is_vertical else 0.75
-        fg_w = (int(vw * scale_ratio) // 2) * 2
-        fg_h = (int(vh * scale_ratio) // 2) * 2
-
-        fg_crop_w = (int(fg_w * 0.96) // 2) * 2
-        fg_crop_h = (int(fg_h * 0.96) // 2) * 2
-        fg_crop_x = (int((fg_w - fg_crop_w) / 2) // 2) * 2
-        fg_crop_y = (int((fg_h - fg_crop_h) / 2) // 2) * 2
-
-        filter_parts = []
-
-        if blur_subtitles:
-            filter_parts.append(f"[0:v]scale={vw}:{vh},split=2[v_base1][v_crop]")
-            filter_parts.append(f"[v_crop]crop={sub_w}:{sub_h}:{sub_x}:{sub_y},boxblur=16:2[v_blur]")
-            filter_parts.append(f"[v_base1][v_blur]overlay={sub_x}:{sub_y}[v_source]")
-        else:
-            filter_parts.append(f"[0:v]scale={vw}:{vh}[v_source]")
-
-        # Recap Canvas Generation (Blurred backdrop + Scaled centered drama clip)
-        filter_parts.extend([
-            f"[v_source]split=2[bg_in][fg_in]",
-            f"[bg_in]boxblur=26:5,eq=brightness=-0.25:contrast=1.05,setpts={pts_factor:.6f}*PTS[bg]",
-            f"[fg_in]scale={fg_w}:{fg_h},crop={fg_crop_w}:{fg_crop_h}:{fg_crop_x}:{fg_crop_y},"
+        # Direct 1:1 original resolution full screen processing
+        filter_parts = [
+            f"[0:v]scale={vw}:{vh},"
             f"hflip,eq=contrast=1.12:brightness=0.02:saturation=1.15:gamma=0.98,noise=alls=6:allf=t+u,"
-            f"setpts={pts_factor:.6f}*PTS[fg]",
-            f"[bg][fg]overlay=(W-w)/2:(H-h)/2[v_canvas]"
-        ])
-
-        input_index_tracker = 2
-        if banner_file and os.path.exists(banner_file):
-            filter_parts.append(f"[v_canvas][{input_index_tracker}:v]overlay=0:0[v_bannered]")
-            current_v = "[v_bannered]"
-            input_index_tracker += 1
-        else:
-            current_v = "[v_canvas]"
+            f"setpts={pts_factor:.6f}*PTS[v_base]"
+        ]
+        current_v = "[v_base]"
 
         # Logo / Watermark
         logo_w = 80
@@ -874,7 +628,7 @@ def merge_with_realtime_progress(
 
         if has_logo:
             filter_parts.append(
-                f"[{input_index_tracker}:v]scale={logo_w}:{logo_w},format=rgba,"
+                f"[2:v]scale={logo_w}:{logo_w},format=rgba,"
                 f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-W/2,Y-H/2),W/2-1),255,0)',"
                 f"colorchannelmixer=aa=0.18[wm]"
             )
@@ -892,9 +646,6 @@ def merge_with_realtime_progress(
             "-i", video_path,
             "-i", temp_mixed_audio
         ]
-
-        if banner_file and os.path.exists(banner_file):
-            cmd.extend(["-i", banner_file])
 
         if has_logo:
             cmd.extend(["-loop", "1", "-i", logo_path])
@@ -926,8 +677,6 @@ def merge_with_realtime_progress(
                 "-i", video_path,
                 "-i", temp_mixed_audio
             ]
-            if banner_file and os.path.exists(banner_file):
-                fb_cmd.extend(["-i", banner_file])
             if has_logo:
                 fb_cmd.extend(["-loop", "1", "-i", logo_path])
 
@@ -957,11 +706,6 @@ def merge_with_realtime_progress(
         if os.path.exists(temp_mixed_audio):
             try:
                 os.remove(temp_mixed_audio)
-            except Exception:
-                pass
-        if os.path.exists(temp_banner_path):
-            try:
-                os.remove(temp_banner_path)
             except Exception:
                 pass
         for tmp_f in fitted_temp_files:
@@ -1072,9 +816,7 @@ def run_dubbing_pipeline(
     subtitle_filename: Optional[str] = None,
     output_mode: str = "both",
     voice_mode: str = "auto",
-    add_watermark: bool = False,
-    blur_subtitles: bool = False,
-    banner_bottom_text: str = "ចុច Follow ដើម្បីទស្សនាភាគបន្ត"
+    add_watermark: bool = False
 ):
     try:
         translator = KhmerTranslator()
@@ -1095,7 +837,6 @@ def run_dubbing_pipeline(
         public_bg_audio_name = f"sfx_track_{task_id}.wav"
         public_bg_audio_path = os.path.join("output", public_bg_audio_name)
         if os.path.exists(background_audio_path):
-            import shutil
             shutil.copy(background_audio_path, public_bg_audio_path)
             task_data[task_id]["public_bg_audio"] = f"/output/{public_bg_audio_name}"
 
@@ -1104,8 +845,6 @@ def run_dubbing_pipeline(
         task_data[task_id]["output_path"] = output_path
         task_data[task_id]["audio_mode"] = output_mode
         task_data[task_id]["add_watermark"] = add_watermark
-        task_data[task_id]["blur_subtitles"] = blur_subtitles
-        task_data[task_id]["banner_bottom_text"] = banner_bottom_text
 
         if output_mode == "bg_only":
             task_data[task_id]["status"] = {"status": "processing", "step": "Exporting SFX Only video...", "progress": 75}
@@ -1120,9 +859,7 @@ def run_dubbing_pipeline(
                 bg_volume=0.25,
                 voice_volume=0.0,
                 audio_mode="bg_only",
-                add_watermark=add_watermark,
-                blur_subtitles=blur_subtitles,
-                banner_bottom_text=banner_bottom_text
+                add_watermark=add_watermark
             )
 
             task_data[task_id]["status"] = {
@@ -1252,9 +989,7 @@ def run_dubbing_pipeline(
             bg_volume=sfx_vol,
             voice_volume=voice_vol,
             audio_mode=output_mode,
-            add_watermark=add_watermark,
-            blur_subtitles=blur_subtitles,
-            banner_bottom_text=banner_bottom_text
+            add_watermark=add_watermark
         )
 
         for seg in audio_segments:
@@ -1363,7 +1098,6 @@ async def merge_completed_videos(req: MergeVideosRequest):
             "voice_volume": 1.8,
             "audio_mode": "both",
             "add_watermark": False,
-            "blur_subtitles": False,
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
         }
         save_task_to_disk(merge_id)
@@ -1487,8 +1221,6 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
         voice_mode = body.get("voice_mode", "auto")
         pasted_script = body.get("pasted_script")
         add_watermark = bool(body.get("add_watermark", False))
-        blur_subtitles = bool(body.get("blur_subtitles", True))
-        banner_bottom_text = body.get("banner_bottom_text", "ចុច Follow ដើម្បីទស្សនាភាគបន្ត")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}")
 
@@ -1518,8 +1250,6 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
         "voice_volume": 1.8 if output_mode != "bg_only" else 0.0,
         "audio_mode": output_mode,
         "add_watermark": add_watermark,
-        "blur_subtitles": blur_subtitles,
-        "banner_bottom_text": banner_bottom_text,
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
     }
     save_task_to_disk(task_id)
@@ -1527,8 +1257,7 @@ async def translate_file(background_tasks: BackgroundTasks, request: Request):
     background_tasks.add_task(
         run_dubbing_pipeline,
         task_id, video_path, source_lang, output_path, filename,
-        subtitle_filename, output_mode, voice_mode, add_watermark, blur_subtitles,
-        banner_bottom_text
+        subtitle_filename, output_mode, voice_mode, add_watermark
     )
     return {"task_id": task_id, "message": "Anti-copyright Khmer dubbing started."}
 
@@ -1884,8 +1613,6 @@ async def get_editor_data(task_id: str):
         "voice_volume": tdata.get("voice_volume", 1.8),
         "audio_mode": tdata.get("audio_mode", "both"),
         "add_watermark": tdata.get("add_watermark", False),
-        "blur_subtitles": tdata.get("blur_subtitles", True),
-        "banner_bottom_text": tdata.get("banner_bottom_text", "ចុច Follow ដើម្បីទស្សនាភាគបន្ត"),
         "output_video": f"/output/{out_filename}",
         "background_audio": tdata.get("public_bg_audio")
     }
@@ -1926,15 +1653,11 @@ async def re_render_task(task_id: str, payload: dict):
     voice_volume = float(payload.get("voice_volume", 1.8))
     audio_mode = payload.get("audio_mode", "both")
     add_watermark = bool(payload.get("add_watermark", False))
-    blur_subtitles = bool(payload.get("blur_subtitles", True))
-    banner_bottom_text = payload.get("banner_bottom_text", "ចុច Follow ដើម្បីទស្សនាភាគបន្ត")
 
     tdata["bg_volume"] = bg_volume
     tdata["voice_volume"] = voice_volume
     tdata["audio_mode"] = audio_mode
     tdata["add_watermark"] = add_watermark
-    tdata["blur_subtitles"] = blur_subtitles
-    tdata["banner_bottom_text"] = banner_bottom_text
 
     for seg in segments:
         if "translated_text" in seg:
@@ -1976,9 +1699,7 @@ async def re_render_task(task_id: str, payload: dict):
             bg_volume=bg_volume,
             voice_volume=voice_volume,
             audio_mode=audio_mode,
-            add_watermark=add_watermark,
-            blur_subtitles=blur_subtitles,
-            banner_bottom_text=banner_bottom_text
+            add_watermark=add_watermark
         )
 
         for seg in audio_segments:
