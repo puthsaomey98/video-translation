@@ -29,9 +29,10 @@
             <div class="flex items-center space-x-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
                 <span class="text-[10px] text-slate-400 font-mono px-1">Mix Preset:</span>
                 <select id="audioModePreset" onchange="applyAudioModePreset(this.value)" class="bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1 font-medium focus:outline-none focus:border-indigo-500">
-                    <option value="both" selected>🎵 BGM + 🎙️ Voice</option>
-                    <option value="bg_only">🎶 Sound Only Background</option>
-                    <option value="voice_only">🎙️ Voice Only (No BGM)</option>
+                    <option value="bgm_sfx_voice" selected>🎵 Music + 💥 SFX + 🎙️ Voice</option>
+                    <option value="sfx_voice">💥 SFX + 🎙️ Voice</option>
+                    <option value="bgm_voice">🎵 Music + 🎙️ Voice</option>
+                    <option value="voice_only">🎙️ Only Khmer Voice</option>
                 </select>
             </div>
 
@@ -262,22 +263,24 @@
             const voiceVolInput = document.getElementById('voiceVolume');
             const bgAudioEl = document.getElementById('bgAudioNode');
 
-            if (mode === 'bg_only') {
-                bgVolInput.value = 0.7;
-                voiceVolInput.value = 0.0;
-            } else if (mode === 'voice_only') {
+            if (mode === 'voice_only') {
                 bgVolInput.value = 0.0;
-                voiceVolInput.value = 1.5;
-            } else {
+                voiceVolInput.value = 1.8;
+            } else if (mode === 'bgm_voice') {
+                bgVolInput.value = 0.0;
+                voiceVolInput.value = 1.8;
+            } else if (mode === 'sfx_voice') {
                 bgVolInput.value = 0.4;
-                voiceVolInput.value = 1.5;
+                voiceVolInput.value = 1.8;
+            } else { // bgm_sfx_voice
+                bgVolInput.value = 0.35;
+                voiceVolInput.value = 1.8;
             }
 
             document.getElementById('bgVolVal').innerText = bgVolInput.value;
             document.getElementById('voiceVolVal').innerText = voiceVolInput.value;
             if (bgAudioEl) bgAudioEl.volume = parseFloat(bgVolInput.value);
         }
-
         function togglePlayPause() {
             const videoEl = document.getElementById('videoPreview');
             const bgAudioEl = document.getElementById('bgAudioNode');
@@ -432,7 +435,7 @@
                         end: seg.end, 
                         source_text: seg.source_text || "", 
                         translated_text: seg.translated_text,
-                        gender: seg.gender || "female"
+                        gender: seg.gender || "male"
                     })
                 });
                 const data = await res.json();

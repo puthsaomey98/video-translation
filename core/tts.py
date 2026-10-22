@@ -13,11 +13,7 @@ except Exception:
 
 
 def create_silent_audio_fallback(output_path: str, duration: float = 1.0) -> bool:
-    """
-    Creates a brief silent audio file using FFmpeg.
-    Ensures MoviePy/FFmpeg never crashes with 'No audio tracks selected for mixing'
-    if the online TTS service temporarily blocks requests.
-    """
+    """Creates a brief silent audio file so the FFmpeg rendering pipeline never crashes."""
     try:
         cmd = [
             FFMPEG_PATH, "-y",
@@ -34,10 +30,37 @@ def create_silent_audio_fallback(output_path: str, duration: float = 1.0) -> boo
         return False
 
 
+def clean_khmer_tts_text(text: str) -> str:
+    """
+    Cleans invisible Unicode characters, ellipses, and formatting symbols
+    that cause Microsoft Edge-TTS km-KH neural models to return 'No audio was received'.
+    """
+    if not text:
+        return ""
+
+    # Strip zero-width spaces, non-joiners, byte-order marks, and non-breaking spaces
+    cleaned = re.sub(r'[\u200b\u200c\u200d\ufeff\xa0]', ' ', text)
+
+    # Strip subtitle annotations, music tags, and brackets
+    cleaned = re.sub(r'\[.*?\]|\(.*?\)', '', cleaned)
+    cleaned = re.sub(r'<.*?>', '', cleaned)
+    cleaned = re.sub(r'[♪♫\-\_#@*^~]+', ' ', cleaned)
+
+    # Replace multiple dots/ellipses with a standard Khmer pause sign (។)
+    cleaned = re.sub(r'\.{2,}|…', ' ។ ', cleaned)
+
+    # Remove problematic quotation marks
+    cleaned = re.sub(r'["\'“”«»`]+', '', cleaned)
+
+    # Collapse multiple whitespaces
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
+
+
 async def generate_segment_audio(
     text: str,
     output_path: str,
-    gender: str = "female",
+    gender: str = "male",
     rate: str = "+0%",
     volume: str = "+0%",
     pitch: str = "+0Hz",
@@ -45,27 +68,24 @@ async def generate_segment_audio(
 ) -> bool:
     """
     Generates natural Khmer neural voiceover audio using Edge TTS.
-    Features exponential backoff, voice fallback, and emergency silent audio generation.
+    Strictly forces Male (Piseth) or Female (Sreymom).
     """
-    is_male = str(gender).strip().lower() == "male"
+    is_male = str(gender).strip().lower() in ["male", "force_male", "m"]
     primary_voice = "km-KH-PisethNeural" if is_male else "km-KH-SreymomNeural"
     fallback_voice = "km-KH-SreymomNeural" if is_male else "km-KH-PisethNeural"
 
-    # Clean punctuation, bracketed annotations, and music symbols
-    clean_text = re.sub(r'[♪♫\[\]\(\)\-\_]+', '', text).strip()
-    
-    # Verify string contains Khmer unicode or alphanumeric characters
+    clean_text = clean_khmer_tts_text(text)
+
+    # Verify string contains readable Khmer unicode or alphanumeric characters
     if not clean_text or not any(char.isalnum() or ('\u1780' <= char <= '\u17FF') for char in clean_text):
         return create_silent_audio_fallback(output_path, duration=0.8)
 
     for attempt in range(1, retries + 1):
-        # Alternate to fallback voice on subsequent attempts
-        voice_to_use = primary_voice if attempt == 1 else fallback_voice
-        
+        voice_to_use = primary_voice if attempt < retries else fallback_voice
+
         try:
-            # Back off to clear Microsoft WebSocket rate limits
             if attempt > 1:
-                await asyncio.sleep(1.0 * attempt)
+                await asyncio.sleep(1.2 * attempt)
 
             communicate = edge_tts.Communicate(
                 text=clean_text,
@@ -76,13 +96,13 @@ async def generate_segment_audio(
             )
             await communicate.save(output_path)
 
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 200:
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 300:
                 return True
 
         except Exception as e:
             print(f"⚠️ TTS attempt {attempt}/{retries} failed ({voice_to_use}): {e}")
 
-    # Emergency safety net: create silence so the video rendering pipeline continues uninterrupted
+    # Fallback to silent segment to keep the pipeline moving if network times out
     print(f"⚠️ Warning: TTS unavailable for '{clean_text[:25]}...'. Generating silent placeholder audio.")
     return create_silent_audio_fallback(output_path, duration=1.2)
 

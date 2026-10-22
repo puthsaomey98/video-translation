@@ -208,12 +208,12 @@
 
                 <!-- Output Audio Mode Selector Box -->
                 <div class="bg-slate-950 p-3.5 rounded-xl border border-indigo-500/40 space-y-1.5">
-                    <label class="block text-[10px] font-bold text-indigo-300 font-mono uppercase tracking-wider">Audio & Output Generation Mode</label>
+                    <label class="block text-[10px] font-bold text-indigo-300 font-mono uppercase tracking-wider">Audio Output Preset</label>
                     <select id="outputModeSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-medium">
-                        <option value="both" selected>🎬 Background Music + Khmer AI Voice + Subtitles</option>
-                        <option value="bg_and_voice">🎧 Background Music + Khmer AI Voice (Audio Dubbed)</option>
-                        <option value="bg_only">🎶 Sound Only Background (Vocal Removed / BGM Track Only)</option>
-                        <option value="voice_only">🎙️ Khmer Voice Only (No Background Music)</option>
+                        <option value="bgm_sfx_voice" selected>🎵 Music + 💥 Sound Effect + 🎙️ Khmer Voice</option>
+                        <option value="sfx_voice">💥 Sound Effect + 🎙️ Khmer Voice</option>
+                        <option value="bgm_voice">🎵 Music + 🎙️ Khmer Voice</option>
+                        <option value="voice_only">🎙️ Only Khmer Speaking Voice</option>
                         <option value="subtitle">📄 Subtitle Only (Khmer .srt Only)</option>
                     </select>
                 </div>
@@ -263,11 +263,10 @@
                     </div>
 
                     <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
-                        <label class="block text-[10px] text-slate-400 font-mono uppercase">Speaker Voice Mode</label>
-                        <select id="voiceModeSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:border-indigo-500">
-                            <option value="auto" selected>🎙️ Auto-Detect Pitch (Male/Female)</option>
-                            <option value="force_female">♀️ Female Voice (Sreymom)</option>
-                            <option value="force_male">♂️ Male Voice (Piseth)</option>
+                        <label class="block text-[10px] text-slate-400 font-mono uppercase">Speaker Voice</label>
+                        <select id="voiceModeSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:border-indigo-500 font-medium">
+                            <option value="male" selected>♂️ Male Voice (Piseth - ពិសិដ្ឋ)</option>
+                            <option value="female">♀️ Female Voice (Sreymom - ស្រីមុំ)</option>
                         </select>
                     </div>
 
